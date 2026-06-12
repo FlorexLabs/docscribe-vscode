@@ -12,7 +12,7 @@ interface FileDiagnostics {
   error: boolean;
 }
 
-function parseExplainOutput(output: string): Map<string, FileDiagnostics> {
+export function parseExplainOutput(output: string): Map<string, FileDiagnostics> {
   const files = new Map<string, FileDiagnostics>();
   let currentFile: string | null = null;
   let currentIssues: ParsedIssue[] = [];

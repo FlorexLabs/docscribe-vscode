@@ -8,7 +8,7 @@ let outputChannel: vscode.OutputChannel;
 async function withProgress<T>(title: string, task: () => Promise<T>): Promise<T> {
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title, cancellable: false },
-    task
+    task,
   );
 }
 
@@ -40,22 +40,25 @@ export function activate(context: vscode.ExtensionContext) {
   const checkFileCmd = vscode.commands.registerCommand('docscribe.checkFile', async () => {
     if (!requireRubyFile()) return;
     const result = await withProgress('DocScribe: checking file...', () =>
-      runDocscribe({ strategy: 'check' })
+      runDocscribe({ strategy: 'check' }),
     );
     showResult(result);
   });
 
-  const checkWorkspaceCmd = vscode.commands.registerCommand('docscribe.checkWorkspace', async () => {
-    const result = await withProgress('DocScribe: checking workspace...', () =>
-      runDocscribe({ strategy: 'check', workspace: true })
-    );
-    showResult(result);
-  });
+  const checkWorkspaceCmd = vscode.commands.registerCommand(
+    'docscribe.checkWorkspace',
+    async () => {
+      const result = await withProgress('DocScribe: checking workspace...', () =>
+        runDocscribe({ strategy: 'check', workspace: true }),
+      );
+      showResult(result);
+    },
+  );
 
   const safeFixCmd = vscode.commands.registerCommand('docscribe.safeFix', async () => {
     if (!requireRubyFile()) return;
     const result = await withProgress('DocScribe: applying safe fixes...', () =>
-      runDocscribe({ strategy: 'safe' })
+      runDocscribe({ strategy: 'safe' }),
     );
     showResult(result);
   });
@@ -63,7 +66,7 @@ export function activate(context: vscode.ExtensionContext) {
   const aggressiveFixCmd = vscode.commands.registerCommand('docscribe.aggressiveFix', async () => {
     if (!requireRubyFile()) return;
     const result = await withProgress('DocScribe: applying aggressive fixes...', () =>
-      runDocscribe({ strategy: 'aggressive' })
+      runDocscribe({ strategy: 'aggressive' }),
     );
     showResult(result);
   });
@@ -81,9 +84,12 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    checkFileCmd, checkWorkspaceCmd, safeFixCmd, aggressiveFixCmd,
-    diagProvider, fixCmd, codeActionProvider,
+    checkFileCmd,
+    checkWorkspaceCmd,
+    safeFixCmd,
+    aggressiveFixCmd,
+    diagProvider,
+    fixCmd,
+    codeActionProvider,
   );
 }
-
-export function deactivate() {}

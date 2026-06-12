@@ -11,10 +11,10 @@ export class DocscribeCodeActionProvider implements vscode.CodeActionProvider {
     context: vscode.CodeActionContext,
     _token: vscode.CancellationToken,
   ): vscode.CodeAction[] | undefined {
-    const relevantDiags = context.diagnostics.filter(d => d.source === 'docscribe');
+    const relevantDiags = context.diagnostics.filter((d) => d.source === 'docscribe');
     if (relevantDiags.length === 0) return undefined;
 
-    return relevantDiags.map(diag => {
+    return relevantDiags.map((diag) => {
       const action = new vscode.CodeAction(
         `DocScribe: ${diag.message}`,
         vscode.CodeActionKind.QuickFix,
@@ -49,9 +49,17 @@ export async function applyFix(uri: vscode.Uri): Promise<void> {
   const cmdArgs = useBundleExec ? ['exec', commandPath, '-a', '--stdin'] : ['-a', '--stdin'];
 
   const result = await new Promise<{ output: string; code: number | null }>((resolve) => {
-    const child = execFile(cmd, cmdArgs, { cwd: root, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      resolve({ output: stdout || stderr, code: err ? (typeof err.code === 'number' ? err.code : 1) : 0 });
-    });
+    const child = execFile(
+      cmd,
+      cmdArgs,
+      { cwd: root, maxBuffer: 10 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        resolve({
+          output: stdout || stderr,
+          code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
+        });
+      },
+    );
     if (child.stdin) {
       child.stdin.write(code);
       child.stdin.end();

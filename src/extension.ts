@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { runDocscribe } from './docscribeRunner';
+import { createDiagnosticProvider } from './diagnosticProvider';
 
 let outputChannel: vscode.OutputChannel;
 
@@ -66,7 +67,8 @@ export function activate(context: vscode.ExtensionContext) {
     showResult(result);
   });
 
-  context.subscriptions.push(checkFileCmd, checkWorkspaceCmd, safeFixCmd, aggressiveFixCmd);
+  const diagProvider = createDiagnosticProvider();
+  context.subscriptions.push(checkFileCmd, checkWorkspaceCmd, safeFixCmd, aggressiveFixCmd, diagProvider);
 }
 
 export function deactivate() {}

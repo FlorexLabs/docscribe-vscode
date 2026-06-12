@@ -7,6 +7,7 @@ export interface RunOptions {
   file?: string;
   workspace?: boolean;
   strategy?: 'check' | 'safe' | 'aggressive';
+  explain?: boolean;
 }
 
 export interface RunResult {
@@ -14,7 +15,7 @@ export interface RunResult {
   output: string;
 }
 
-function findProjectRoot(startPath: string): string | null {
+export function findProjectRoot(startPath: string): string | null {
   let current = fs.realpathSync(startPath);
   for (let i = 0; i < 20; i++) {
     if (fs.existsSync(path.join(current, 'Gemfile'))) {
@@ -27,12 +28,15 @@ function findProjectRoot(startPath: string): string | null {
   return null;
 }
 
-function getCommandArgs(strategy: string, filePath?: string): string[] {
+function getCommandArgs(strategy: string, explain: boolean, filePath?: string): string[] {
   const args: string[] = [];
   if (strategy === 'safe') {
     args.push('-a');
   } else if (strategy === 'aggressive') {
     args.push('-A');
+  }
+  if (explain) {
+    args.push('--explain', '--verbose');
   }
   if (filePath) {
     args.push(filePath);
@@ -71,7 +75,8 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
 
   const config = vscode.workspace.getConfiguration('docscribe');
   const strategy = options.strategy || 'check';
-  const args = getCommandArgs(strategy, options.workspace ? undefined : filePath);
+  const explain = options.explain ?? false;
+  const args = getCommandArgs(strategy, explain, options.workspace ? undefined : filePath);
 
   const useBundleExec = config.get<boolean>('useBundleExec', true);
   const commandPath = config.get<string>('commandPath', 'docscribe');

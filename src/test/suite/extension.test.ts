@@ -10,6 +10,14 @@ suite('DocScribe Extension', () => {
     const commands = await vscode.commands.getCommands(true);
     const docscribeCommands = commands.filter((c: string) => c.startsWith('docscribe.'));
 
+    console.log('External docscribe commands:', JSON.stringify(docscribeCommands));
+
+    if (!docscribeCommands.includes('docscribe.checkFile')) {
+      const allCommands = await vscode.commands.getCommands(false);
+      const allDocscribe = allCommands.filter((c: string) => c.startsWith('docscribe.'));
+      console.log('ALL docscribe commands (incl internal):', JSON.stringify(allDocscribe));
+    }
+
     assert.ok(docscribeCommands.includes('docscribe.checkFile'));
     assert.ok(docscribeCommands.includes('docscribe.checkWorkspace'));
     assert.ok(docscribeCommands.includes('docscribe.safeFix'));

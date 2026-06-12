@@ -13,7 +13,7 @@ async function main() {
       version,
       extensionDevelopmentPath,
       extensionTestsPath,
-      launchArgs: ['--disable-extensions'],
+      launchArgs: [],
     });
 
     if (exitCode !== 0) {

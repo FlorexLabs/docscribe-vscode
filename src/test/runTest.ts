@@ -6,15 +6,19 @@ async function main() {
     const extensionDevelopmentPath = path.resolve(__dirname, '..', '..');
     const extensionTestsPath = path.resolve(__dirname, 'suite', 'index');
 
-    const vsCodeVersionArg = process.argv.find(a => a.startsWith('--vscode-version='));
-    const version = vsCodeVersionArg?.split('=')[1];
+    const vsCodeVersionIndex = process.argv.indexOf('--vscode-version');
+    const version = vsCodeVersionIndex >= 0 ? process.argv[vsCodeVersionIndex + 1] : undefined;
 
-    await runTests({
+    const exitCode = await runTests({
       version,
       extensionDevelopmentPath,
       extensionTestsPath,
       launchArgs: ['--disable-extensions'],
     });
+
+    if (exitCode !== 0) {
+      process.exit(exitCode);
+    }
   } catch (err) {
     console.error('Failed to run tests:', err);
     process.exit(1);

@@ -1,0 +1,77 @@
+{
+  "name": "docscribe-vscode",
+  "displayName": "DocScribe",
+  "description": "Auto-generate inline YARD documentation for Ruby methods using docscribe",
+  "version": "0.0.1",
+  "publisher": "unurgunite",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "ruby",
+    "yard",
+    "documentation",
+    "docscribe"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "docscribe.checkFile",
+        "title": "DocScribe: Check current file"
+      },
+      {
+        "command": "docscribe.checkWorkspace",
+        "title": "DocScribe: Check entire workspace"
+      },
+      {
+        "command": "docscribe.safeFix",
+        "title": "DocScribe: Apply safe fixes to current file"
+      },
+      {
+        "command": "docscribe.aggressiveFix",
+        "title": "DocScribe: Apply aggressive fixes to current file"
+      }
+    ],
+    "configuration": {
+      "title": "DocScribe",
+      "properties": {
+        "docscribe.commandPath": {
+          "type": "string",
+          "default": "docscribe",
+          "description": "Path to the docscribe executable"
+        },
+        "docscribe.useBundleExec": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use bundle exec to run docscribe"
+        },
+        "docscribe.runOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run docscribe check automatically on file save"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "eslint": "^9.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0"
+  }
+}

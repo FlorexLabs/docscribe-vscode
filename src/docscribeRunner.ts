@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { execFile } from 'child_process';
+import * as proc from './execAsync';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -44,9 +44,21 @@ function getCommandArgs(strategy: string, explain: boolean, filePath?: string): 
   return args;
 }
 
-function execCommand(cmd: string, args: string[], cwd: string): Promise<RunResult> {
+type ExecFunction = (
+  cmd: string,
+  args: string[],
+  options: object,
+  callback: (err: Error | null, stdout: string, stderr: string) => void,
+) => void;
+
+export function execCommand(
+  cmd: string,
+  args: string[],
+  cwd: string,
+  execFn: ExecFunction = proc.execFile,
+): Promise<RunResult> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFn(cmd, args, { cwd, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       const output = stderr ? `${stdout}\n${stderr}` : stdout;
       if (err) {
         resolve({ success: false, output });
@@ -59,7 +71,7 @@ function execCommand(cmd: string, args: string[], cwd: string): Promise<RunResul
 
 export async function runDocscribe(options: RunOptions): Promise<RunResult> {
   const editor = vscode.window.activeTextEditor;
-  if (!options.workspace && !editor) {
+  if (!options.workspace && !options.file && !editor) {
     return { success: false, output: 'No active editor' };
   }
 

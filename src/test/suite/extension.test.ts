@@ -7,16 +7,20 @@ suite('DocScribe Extension', () => {
   });
 
   test('commands should be registered', async () => {
+    const ext = vscode.extensions.getExtension('unurgunite.docscribe-vscode');
+    console.log('Extension found:', !!ext);
+    if (ext) {
+      console.log('Extension activated:', ext.isActive);
+      if (!ext.isActive) {
+        await ext.activate();
+        console.log('After manual activate:', ext.isActive);
+      }
+    }
+
     const commands = await vscode.commands.getCommands(true);
     const docscribeCommands = commands.filter((c: string) => c.startsWith('docscribe.'));
 
-    console.log('External docscribe commands:', JSON.stringify(docscribeCommands));
-
-    if (!docscribeCommands.includes('docscribe.checkFile')) {
-      const allCommands = await vscode.commands.getCommands(false);
-      const allDocscribe = allCommands.filter((c: string) => c.startsWith('docscribe.'));
-      console.log('ALL docscribe commands (incl internal):', JSON.stringify(allDocscribe));
-    }
+    console.log('docscribe commands:', JSON.stringify(docscribeCommands));
 
     assert.ok(docscribeCommands.includes('docscribe.checkFile'));
     assert.ok(docscribeCommands.includes('docscribe.checkWorkspace'));

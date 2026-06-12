@@ -18,7 +18,6 @@
     "documentation",
     "docscribe"
   ],
-  "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [

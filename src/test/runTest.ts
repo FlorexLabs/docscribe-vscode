@@ -20,7 +20,7 @@ async function main() {
       process.exit(exitCode);
     }
   } catch (err) {
-    console.error('Failed to run tests:', err);
+    console.error('Failed to run tests:', err); // eslint-disable-line no-console
     process.exit(1);
   }
 }

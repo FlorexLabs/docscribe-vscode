@@ -7,6 +7,11 @@ suite('DocScribe Extension', () => {
   });
 
   test('commands should be registered', async () => {
+    const ext = vscode.extensions.getExtension('unurgunite.docscribe-vscode');
+    if (ext && !ext.isActive) {
+      await ext.activate();
+    }
+
     const commands = await vscode.commands.getCommands(true);
     const docscribeCommands = commands.filter((c: string) => c.startsWith('docscribe.'));
 

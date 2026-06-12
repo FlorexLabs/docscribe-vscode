@@ -37,6 +37,10 @@
       {
         "command": "docscribe.aggressiveFix",
         "title": "DocScribe: Apply aggressive fixes to current file"
+      },
+      {
+        "command": "docscribe.applyFix",
+        "title": "DocScribe: Apply fix"
       }
     ],
     "configuration": {

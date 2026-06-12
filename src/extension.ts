@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { runDocscribe } from './docscribeRunner';
 import { createDiagnosticProvider } from './diagnosticProvider';
+import { DocscribeCodeActionProvider, applyFix } from './codeActionProvider';
 
 let outputChannel: vscode.OutputChannel;
 
@@ -68,7 +69,21 @@ export function activate(context: vscode.ExtensionContext) {
   });
 
   const diagProvider = createDiagnosticProvider();
-  context.subscriptions.push(checkFileCmd, checkWorkspaceCmd, safeFixCmd, aggressiveFixCmd, diagProvider);
+
+  const fixCmd = vscode.commands.registerCommand('docscribe.applyFix', (uri: vscode.Uri) => {
+    applyFix(uri);
+  });
+
+  const codeActionProvider = vscode.languages.registerCodeActionsProvider(
+    { language: 'ruby' },
+    new DocscribeCodeActionProvider(),
+    { providedCodeActionKinds: DocscribeCodeActionProvider.providedCodeActionKinds },
+  );
+
+  context.subscriptions.push(
+    checkFileCmd, checkWorkspaceCmd, safeFixCmd, aggressiveFixCmd,
+    diagProvider, fixCmd, codeActionProvider,
+  );
 }
 
 export function deactivate() {}

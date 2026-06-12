@@ -5,6 +5,5 @@
 .nvmrc
 tsconfig.json
 src/**
-test/**
 node_modules/**
-.eslintrc.json
+eslint.config.mjs

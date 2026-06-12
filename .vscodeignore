@@ -11,3 +11,5 @@ eslint.config.mjs
 SECURITY.md
 *.svg
 *.fig
+.husky/**
+.lintstagedrc.js

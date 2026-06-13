@@ -3,18 +3,44 @@ import * as proc from './execAsync';
 import * as path from 'path';
 import * as fs from 'fs';
 
+/**
+ * Options for the docscribe runner.
+ */
 export interface RunOptions {
+  /** Path to a specific Ruby file to check. If omitted, uses the active editor. */
   file?: string;
+  /** If true, checks all Ruby files in the project instead of a single file. */
   workspace?: boolean;
+  /**
+   * Fixing strategy:
+   * - `check` — only report missing docs
+   * - `safe` — add docs only to undocumented methods
+   * - `aggressive` — replace all existing YARD docs
+   */
   strategy?: 'check' | 'safe' | 'aggressive';
+  /** If true, passes --explain --verbose for detailed per-method output. */
   explain?: boolean;
 }
 
+/**
+ * Result of a docscribe command execution.
+ */
 export interface RunResult {
+  /** Whether the command exited successfully. */
   success: boolean;
+  /** Combined stdout + stderr output. */
   output: string;
 }
 
+/**
+ * Crawls up the directory tree from a file path to find a Gemfile.
+ *
+ * Walks at most 20 levels up. Returns the first directory containing
+ * a `Gemfile`, or `null` if none is found.
+ *
+ * @param startPath - Absolute path to start searching from (typically a Ruby file).
+ * @returns The project root directory path, or `null` if no Gemfile is found.
+ */
 export function findProjectRoot(startPath: string): string | null {
   let current = fs.realpathSync(startPath);
   for (let i = 0; i < 20; i++) {
@@ -28,6 +54,15 @@ export function findProjectRoot(startPath: string): string | null {
   return null;
 }
 
+/**
+ * Checks whether a project's Gemfile lists the `rbs` gem.
+ *
+ * Reads the file synchronously and tests for a line matching
+ * `gem "rbs"` or `gem 'rbs'`.
+ *
+ * @param gemfilePath - Absolute path to the Gemfile.
+ * @returns `true` if `gem "rbs"` is found, `false` otherwise or on read error.
+ */
 export function gemfileHasRbs(gemfilePath: string): boolean {
   try {
     const content = fs.readFileSync(gemfilePath, 'utf8');
@@ -37,6 +72,15 @@ export function gemfileHasRbs(gemfilePath: string): boolean {
   }
 }
 
+/**
+ * Builds the argument list for the docscribe CLI based on strategy and flags.
+ *
+ * @param strategy - Fixing strategy (`check`, `safe`, `aggressive`).
+ * @param explain - Whether to include explain/verbose flags.
+ * @param useRbs - Whether to pass `--rbs-collection`.
+ * @param filePath - Optional file path to pass as the last argument.
+ * @returns An array of CLI argument strings.
+ */
 function getCommandArgs(
   strategy: string,
   explain: boolean,
@@ -61,6 +105,10 @@ function getCommandArgs(
   return args;
 }
 
+/**
+ * Callback signature used by Node's `child_process.execFile`.
+ * Defined here so tests can provide a matching mock.
+ */
 type ExecFunction = (
   cmd: string,
   args: string[],
@@ -68,6 +116,17 @@ type ExecFunction = (
   callback: (err: Error | null, stdout: string, stderr: string) => void,
 ) => void;
 
+/**
+ * Wraps `child_process.execFile` in a Promise.
+ *
+ * The optional `execFn` parameter allows dependency injection for testing.
+ *
+ * @param cmd - Command to execute.
+ * @param args - Command-line arguments.
+ * @param cwd - Working directory for the process.
+ * @param execFn - Function used to spawn the process (default: `proc.execFile`).
+ * @returns A promise resolving to a {@link RunResult}.
+ */
 export function execCommand(
   cmd: string,
   args: string[],
@@ -86,6 +145,16 @@ export function execCommand(
   });
 }
 
+/**
+ * Runs docscribe on the current file or the whole workspace.
+ *
+ * Determines the project root via {@link findProjectRoot}, reads VS Code
+ * configuration for bundle-exec and RBS settings, and delegates to
+ * {@link execCommand}.
+ *
+ * @param options - Execution options (file path, strategy, explain, etc.).
+ * @returns A promise resolving to a {@link RunResult}.
+ */
 export async function runDocscribe(options: RunOptions): Promise<RunResult> {
   const editor = vscode.window.activeTextEditor;
   if (!options.workspace && !options.file && !editor) {

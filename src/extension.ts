@@ -5,6 +5,14 @@ import { DocscribeCodeActionProvider, applyFix } from './codeActionProvider';
 
 let outputChannel: vscode.OutputChannel;
 
+/**
+ * Wraps a task in a VS Code progress notification.
+ *
+ * @typeParam T - The return type of the task.
+ * @param title - Title shown in the progress notification.
+ * @param task - Async function to execute.
+ * @returns The result of the task.
+ */
 async function withProgress<T>(title: string, task: () => Promise<T>): Promise<T> {
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title, cancellable: false },
@@ -12,6 +20,14 @@ async function withProgress<T>(title: string, task: () => Promise<T>): Promise<T
   );
 }
 
+/**
+ * Checks that the active editor has a Ruby file open.
+ *
+ * Shows a warning and returns `false` if the active editor
+ * is missing or the language is not Ruby.
+ *
+ * @returns `true` if a Ruby file is active, `false` otherwise.
+ */
 function requireRubyFile(): boolean {
   const editor = vscode.window.activeTextEditor;
   if (!editor || editor.document.languageId !== 'ruby') {
@@ -21,6 +37,14 @@ function requireRubyFile(): boolean {
   return true;
 }
 
+/**
+ * Displays the docscribe result in the output channel and status bar.
+ *
+ * Clears the channel, writes the full output, shows it in the output panel,
+ * and sets a brief status bar message.
+ *
+ * @param result - The result from a docscribe command.
+ */
 function showResult(result: { success: boolean; output: string }): void {
   outputChannel.clear();
   outputChannel.appendLine(result.output);
@@ -33,6 +57,21 @@ function showResult(result: { success: boolean; output: string }): void {
   }
 }
 
+/**
+ * Activates the DocScribe extension.
+ *
+ * Registers four docscribe commands:
+ * - `docscribe.checkFile`
+ * - `docscribe.checkWorkspace`
+ * - `docscribe.safeFix`
+ * - `docscribe.aggressiveFix`
+ * - `docscribe.applyFix`
+ *
+ * Also registers the diagnostic provider and code action provider
+ * for Ruby files. All disposables are added to `context.subscriptions`.
+ *
+ * @param context - The extension context provided by VS Code on activation.
+ */
 export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('DocScribe');
   context.subscriptions.push(outputChannel);

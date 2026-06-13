@@ -3,9 +3,25 @@ import * as vscode from 'vscode';
 import { execFile } from 'child_process';
 import { findProjectRoot, gemfileHasRbs } from './docscribeRunner';
 
+/**
+ * Provides quick-fix code actions for docscribe diagnostics.
+ *
+ * Registers a lightbulb action for each `docscribe`-source diagnostic
+ * that triggers the {@link applyFix} command.
+ */
 export class DocscribeCodeActionProvider implements vscode.CodeActionProvider {
+  /** Singleton array of provided action kinds. */
   public static readonly providedCodeActionKinds = [vscode.CodeActionKind.QuickFix];
 
+  /**
+   * Returns code actions for diagnostics originating from docscribe.
+   *
+   * @param document - The active text document (unused).
+   * @param _range - The selected range (unused).
+   * @param context - Context containing current diagnostics.
+   * @param _token - Cancellation token (unused).
+   * @returns An array of code actions, or `undefined` if none apply.
+   */
   provideCodeActions(
     document: vscode.TextDocument,
     _range: vscode.Range,
@@ -32,6 +48,15 @@ export class DocscribeCodeActionProvider implements vscode.CodeActionProvider {
   }
 }
 
+/**
+ * Applies a docscribe fix to a file by piping its content through `--stdin`.
+ *
+ * Reads the file content, passes it to docscribe with the `-a --stdin` flags
+ * (and optionally `--rbs-collection`), then replaces the entire document
+ * with the fixed output.
+ *
+ * @param uri - URI of the file to fix.
+ */
 export async function applyFix(uri: vscode.Uri): Promise<void> {
   const doc = await vscode.workspace.openTextDocument(uri);
   const root = findProjectRoot(uri.fsPath);

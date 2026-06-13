@@ -1,0 +1,10 @@
+{
+  "entryPoints": [
+    "src/extension.ts",
+    "src/docscribeRunner.ts",
+    "src/diagnosticProvider.ts",
+    "src/codeActionProvider.ts",
+    "src/execAsync.ts"
+  ],
+  "out": "docs"
+}

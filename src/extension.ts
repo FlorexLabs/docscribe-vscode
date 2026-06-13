@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { runDocscribe } from './docscribeRunner';
-import { createDiagnosticProvider } from './diagnosticProvider';
+import { createDiagnosticProvider, checkDocument } from './diagnosticProvider';
 import { DocscribeCodeActionProvider, applyFix } from './codeActionProvider';
 
 let outputChannel: vscode.OutputChannel;
@@ -39,10 +39,14 @@ export function activate(context: vscode.ExtensionContext) {
 
   const checkFileCmd = vscode.commands.registerCommand('docscribe.checkFile', async () => {
     if (!requireRubyFile()) return;
+    const editor = vscode.window.activeTextEditor;
     const result = await withProgress('DocScribe: checking file...', () =>
       runDocscribe({ strategy: 'check' }),
     );
     showResult(result);
+    if (editor) {
+      await checkDocument(editor.document);
+    }
   });
 
   const checkWorkspaceCmd = vscode.commands.registerCommand(

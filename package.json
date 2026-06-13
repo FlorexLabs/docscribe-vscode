@@ -2,7 +2,7 @@
   "name": "docscribe-vscode",
   "displayName": "DocScribe",
   "description": "Auto-generate inline YARD documentation for Ruby methods using docscribe",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "unurgunite",
   "license": "MIT",
   "icon": "icon.png",
@@ -69,8 +69,13 @@
         },
         "docscribe.runOnSave": {
           "type": "boolean",
-          "default": false,
-          "description": "Run docscribe check automatically on file save"
+          "default": true,
+          "description": "Run docscribe check automatically on file save and open"
+        },
+        "docscribe.useRbs": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use RBS signatures for @param/@return type inference"
         }
       }
     }

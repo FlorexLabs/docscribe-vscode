@@ -28,7 +28,21 @@ export function findProjectRoot(startPath: string): string | null {
   return null;
 }
 
-function getCommandArgs(strategy: string, explain: boolean, filePath?: string): string[] {
+export function gemfileHasRbs(gemfilePath: string): boolean {
+  try {
+    const content = fs.readFileSync(gemfilePath, 'utf8');
+    return /gem\s+['"]rbs['"]/.test(content);
+  } catch {
+    return false;
+  }
+}
+
+function getCommandArgs(
+  strategy: string,
+  explain: boolean,
+  useRbs: boolean,
+  filePath?: string,
+): string[] {
   const args: string[] = [];
   if (strategy === 'safe') {
     args.push('-a');
@@ -37,6 +51,9 @@ function getCommandArgs(strategy: string, explain: boolean, filePath?: string): 
   }
   if (explain) {
     args.push('--explain', '--verbose');
+  }
+  if (useRbs) {
+    args.push('--rbs-collection');
   }
   if (filePath) {
     args.push(filePath);
@@ -88,7 +105,9 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
   const config = vscode.workspace.getConfiguration('docscribe');
   const strategy = options.strategy || 'check';
   const explain = options.explain ?? false;
-  const args = getCommandArgs(strategy, explain, options.workspace ? undefined : filePath);
+  const rbsEnabled = config.get<boolean>('useRbs', false);
+  const useRbs = rbsEnabled && gemfileHasRbs(path.join(projectRoot, 'Gemfile'));
+  const args = getCommandArgs(strategy, explain, useRbs, options.workspace ? undefined : filePath);
 
   const useBundleExec = config.get<boolean>('useBundleExec', true);
   const commandPath = config.get<string>('commandPath', 'docscribe');

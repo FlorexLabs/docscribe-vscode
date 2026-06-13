@@ -1,6 +1,7 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { execFile } from 'child_process';
-import { findProjectRoot } from './docscribeRunner';
+import { findProjectRoot, gemfileHasRbs } from './docscribeRunner';
 
 export class DocscribeCodeActionProvider implements vscode.CodeActionProvider {
   public static readonly providedCodeActionKinds = [vscode.CodeActionKind.QuickFix];
@@ -44,9 +45,13 @@ export async function applyFix(uri: vscode.Uri): Promise<void> {
   const config = vscode.workspace.getConfiguration('docscribe');
   const useBundleExec = config.get<boolean>('useBundleExec', true);
   const commandPath = config.get<string>('commandPath', 'docscribe');
+  const rbsEnabled = config.get<boolean>('useRbs', false);
+  const useRbs = rbsEnabled && gemfileHasRbs(path.join(root, 'Gemfile'));
 
   const cmd = useBundleExec ? 'bundle' : commandPath;
-  const cmdArgs = useBundleExec ? ['exec', commandPath, '-a', '--stdin'] : ['-a', '--stdin'];
+  const cmdArgs = useBundleExec
+    ? ['exec', commandPath, '-a', '--stdin', ...(useRbs ? ['--rbs-collection'] : [])]
+    : ['-a', '--stdin', ...(useRbs ? ['--rbs-collection'] : [])];
 
   const result = await new Promise<{ output: string; code: number | null }>((resolve) => {
     const child = execFile(

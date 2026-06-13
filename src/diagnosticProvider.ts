@@ -55,64 +55,64 @@ export function parseExplainOutput(output: string): Map<string, FileDiagnostics>
   return files;
 }
 
-export function createDiagnosticProvider(): vscode.Disposable {
-  const collection = vscode.languages.createDiagnosticCollection('docscribe');
+const collection = vscode.languages.createDiagnosticCollection('docscribe');
 
-  async function checkDocument(document: vscode.TextDocument) {
-    const uri = document.uri;
+export async function checkDocument(document: vscode.TextDocument): Promise<void> {
+  const uri = document.uri;
 
-    if (document.languageId !== 'ruby') {
-      collection.delete(uri);
-      return;
-    }
-
-    const root = findProjectRoot(uri.fsPath);
-    if (!root) {
-      collection.delete(uri);
-      return;
-    }
-
-    const result = await runDocscribe({
-      file: uri.fsPath,
-      strategy: 'check',
-      explain: true,
-    });
-
-    if (!result.success && !result.output) {
-      collection.delete(uri);
-      return;
-    }
-
-    const files = parseExplainOutput(result.output);
-    const fileKey = path.relative(root, uri.fsPath);
-    const fileDiagnostics = files.get(fileKey) || files.get(uri.fsPath);
-
-    if (!fileDiagnostics || fileDiagnostics.error) {
-      collection.delete(uri);
-      return;
-    }
-
-    const diagnostics: vscode.Diagnostic[] = fileDiagnostics.issues.map((issue) => {
-      const line = Math.max(0, issue.line - 1);
-      const range = new vscode.Range(line, 0, line, document.lineAt(line).text.length);
-      const diag = new vscode.Diagnostic(range, issue.message, vscode.DiagnosticSeverity.Warning);
-      diag.source = 'docscribe';
-      return diag;
-    });
-
-    collection.set(uri, diagnostics);
+  if (document.languageId !== 'ruby') {
+    collection.delete(uri);
+    return;
   }
 
+  const root = findProjectRoot(uri.fsPath);
+  if (!root) {
+    collection.delete(uri);
+    return;
+  }
+
+  const result = await runDocscribe({
+    file: uri.fsPath,
+    strategy: 'check',
+    explain: true,
+  });
+
+  if (!result.success && !result.output) {
+    collection.delete(uri);
+    return;
+  }
+
+  const files = parseExplainOutput(result.output);
+  const fileKey = path.relative(root, uri.fsPath);
+  const fileDiagnostics = files.get(fileKey) || files.get(uri.fsPath);
+
+  if (!fileDiagnostics || fileDiagnostics.error) {
+    collection.delete(uri);
+    return;
+  }
+
+  const diagnostics: vscode.Diagnostic[] = fileDiagnostics.issues.map((issue) => {
+    const line = Math.max(0, issue.line - 1);
+    const range = new vscode.Range(line, 0, line, document.lineAt(line).text.length);
+    const diag = new vscode.Diagnostic(range, issue.message, vscode.DiagnosticSeverity.Warning);
+    diag.source = 'docscribe';
+    return diag;
+  });
+
+  collection.set(uri, diagnostics);
+}
+
+export function createDiagnosticProvider(): vscode.Disposable {
   const onSave = vscode.workspace.onDidSaveTextDocument(async (doc) => {
     const config = vscode.workspace.getConfiguration('docscribe');
-    if (!config.get<boolean>('runOnSave', false)) return;
+    if (!config.get<boolean>('runOnSave', true)) return;
     await checkDocument(doc);
   });
 
   const onOpen = vscode.workspace.onDidOpenTextDocument(async (doc) => {
-    const config = vscode.workspace.getConfiguration('docscribe');
-    if (!config.get<boolean>('runOnSave', false)) return;
-    await checkDocument(doc);
+    if (doc.languageId === 'ruby') {
+      await checkDocument(doc);
+    }
   });
 
   return vscode.Disposable.from(collection, onSave, onOpen);

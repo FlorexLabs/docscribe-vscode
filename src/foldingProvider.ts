@@ -1,14 +1,32 @@
 import * as vscode from 'vscode';
 
 const COMMENT_RE = /^\s*#/;
-const EMPTY_OR_CODE_RE = /^\s*$/;
 
 function isCommentLine(text: string): boolean {
   return COMMENT_RE.test(text);
 }
 
-function isYardDocBlock(lines: string[]): boolean {
-  return lines.some((l) => /@\w+/.test(l));
+export function getCommentBlockStartLines(doc: vscode.TextDocument): number[] {
+  const lines: number[] = [];
+  let i = 0;
+  while (i < doc.lineCount) {
+    const line = doc.lineAt(i);
+    if (!isCommentLine(line.text)) {
+      i++;
+      continue;
+    }
+
+    let end = i;
+    while (end + 1 < doc.lineCount && isCommentLine(doc.lineAt(end + 1).text)) {
+      end++;
+    }
+
+    if (end - i + 1 >= 3) {
+      lines.push(i);
+    }
+    i = end + 1;
+  }
+  return lines;
 }
 
 export class DocscribeFoldingRangeProvider implements vscode.FoldingRangeProvider {
@@ -18,37 +36,14 @@ export class DocscribeFoldingRangeProvider implements vscode.FoldingRangeProvide
     _token: vscode.CancellationToken,
   ): vscode.FoldingRange[] {
     const ranges: vscode.FoldingRange[] = [];
-    const config = vscode.workspace.getConfiguration('docscribe');
-    const foldComments = config.get<boolean>('foldComments', false);
-    const lineCount = document.lineCount;
+    const startLines = getCommentBlockStartLines(document);
 
-    let i = 0;
-    while (i < lineCount) {
-      const line = document.lineAt(i);
-      if (!isCommentLine(line.text) || EMPTY_OR_CODE_RE.test(line.text.trim())) {
-        i++;
-        continue;
-      }
-
-      let end = i;
-      while (end + 1 < lineCount && isCommentLine(document.lineAt(end + 1).text)) {
+    for (const start of startLines) {
+      let end = start;
+      while (end + 1 < document.lineCount && isCommentLine(document.lineAt(end + 1).text)) {
         end++;
       }
-
-      const blockLines: string[] = [];
-      for (let j = i; j <= end; j++) {
-        blockLines.push(document.lineAt(j).text);
-      }
-
-      const length = end - i + 1;
-      if (length >= 3 && isYardDocBlock(blockLines) && i + 1 < lineCount) {
-        const fr = new vscode.FoldingRange(i, end, vscode.FoldingRangeKind.Comment);
-        if (foldComments) {
-          Object.assign(fr, { collapsed: true });
-        }
-        ranges.push(fr);
-      }
-      i = end + 1;
+      ranges.push(new vscode.FoldingRange(start, end, vscode.FoldingRangeKind.Comment));
     }
 
     return ranges;

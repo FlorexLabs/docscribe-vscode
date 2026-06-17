@@ -28,7 +28,9 @@
     "docscribe"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onLanguage:ruby",
+    "onLanguage:rake",
+    "workspaceContains:**/Gemfile"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -54,6 +56,33 @@
         "title": "DocScribe: Apply fix"
       }
     ],
+    "keybindings": [
+      {
+        "command": "docscribe.checkFile",
+        "key": "ctrl+shift+d",
+        "mac": "cmd+shift+d",
+        "when": "editorLangId == ruby"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "docscribe.checkFile",
+          "when": "editorLangId == ruby",
+          "group": "navigation@1"
+        },
+        {
+          "command": "docscribe.safeFix",
+          "when": "editorLangId == ruby",
+          "group": "1_modification@1"
+        },
+        {
+          "command": "docscribe.aggressiveFix",
+          "when": "editorLangId == ruby",
+          "group": "1_modification@2"
+        }
+      ]
+    },
     "configuration": {
       "title": "DocScribe",
       "properties": {

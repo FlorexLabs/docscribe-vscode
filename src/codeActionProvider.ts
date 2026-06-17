@@ -78,34 +78,39 @@ export async function applyFix(uri: vscode.Uri): Promise<void> {
     ? ['exec', commandPath, '-a', '--stdin', ...(useRbs ? ['--rbs-collection'] : [])]
     : ['-a', '--stdin', ...(useRbs ? ['--rbs-collection'] : [])];
 
-  const result = await new Promise<{ output: string; code: number | null }>((resolve) => {
-    const child = execFile(
-      cmd,
-      cmdArgs,
-      { cwd: root, maxBuffer: 10 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        resolve({
-          output: stdout || stderr,
-          code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
-        });
-      },
-    );
-    if (child.stdin) {
-      child.stdin.write(code);
-      child.stdin.end();
-    }
-  });
+  const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>(
+    (resolve) => {
+      const child = execFile(
+        cmd,
+        cmdArgs,
+        { cwd: root, maxBuffer: 10 * 1024 * 1024 },
+        (err, stdout, stderr) => {
+          resolve({
+            stdout: stdout || '',
+            stderr: stderr || '',
+            code: err ? (typeof err.code === 'number' ? err.code : 2) : 0,
+          });
+        },
+      );
+      if (child.stdin) {
+        child.stdin.write(code);
+        child.stdin.end();
+      }
+    },
+  );
 
-  if (result.code !== 0 || !result.output) {
+  if ((result.code ?? 2) >= 2 || (!result.stdout && !result.stderr)) {
     vscode.window.showErrorMessage('DocScribe: failed to apply fix');
     return;
   }
+
+  const fixedCode = result.stdout || result.stderr;
 
   const lastLine = doc.lineCount - 1;
   const lastCol = doc.lineAt(lastLine).text.length;
   const fullRange = new vscode.Range(0, 0, lastLine, lastCol);
   const edit = new vscode.WorkspaceEdit();
-  edit.replace(uri, fullRange, result.output);
+  edit.replace(uri, fullRange, fixedCode);
 
   const applied = await vscode.workspace.applyEdit(edit);
   if (applied) {

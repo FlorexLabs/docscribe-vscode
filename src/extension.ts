@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { runDocscribe } from './docscribeRunner';
+import { runDocscribe, type RunResult } from './docscribeRunner';
 import { createDiagnosticProvider, checkDocument } from './diagnosticProvider';
 import { DocscribeCodeActionProvider, applyFix } from './codeActionProvider';
 
@@ -40,17 +40,20 @@ function requireRubyFile(): boolean {
 /**
  * Displays the docscribe result in the output channel and status bar.
  *
- * Clears the channel, writes the full output, shows it in the output panel,
+ * Clears the channel, writes stdout + stderr, shows it in the output panel,
  * and sets a brief status bar message.
  *
  * @param result - The result from a docscribe command.
  */
-function showResult(result: { success: boolean; output: string }): void {
+function showResult(result: RunResult): void {
   outputChannel.clear();
-  outputChannel.appendLine(result.output);
+  if (result.stdout) outputChannel.appendLine(result.stdout);
+  if (result.stderr) outputChannel.appendLine(result.stderr);
   outputChannel.show();
 
-  if (result.success) {
+  if (result.hasIssues) {
+    vscode.window.setStatusBarMessage('$(warning) DocScribe: issues found', 5000);
+  } else if (result.success) {
     vscode.window.setStatusBarMessage('$(check) DocScribe: done', 3000);
   } else {
     vscode.window.showErrorMessage('DocScribe: see output for details');

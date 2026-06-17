@@ -73,20 +73,44 @@ suite('docscribeRunner', () => {
         mockExec,
       );
       assert.strictEqual(result.success, true);
+      assert.strictEqual(result.hasIssues, false);
+      assert.strictEqual(result.exitCode, 0);
+      assert.strictEqual(result.stdout, 'output text');
+      assert.strictEqual(result.stderr, '');
       assert.strictEqual(result.output, 'output text');
     });
 
-    test('resolves with failure on exec error', async () => {
-      const mockExec = sinon.stub().yields(new Error('fail'), '', 'stderr text');
-      const result = await execCommand('docscribe', ['--check', 'file.rb'], '/tmp', mockExec);
+    test('resolves with success but hasIssues on exit code 1', async () => {
+      const err = Object.assign(new Error('issues found'), { code: 1 });
+      const mockExec = sinon.stub().yields(err, 'json output', 'F');
+      const result = await execCommand(
+        'docscribe',
+        ['--format', 'json', 'file.rb'],
+        '/tmp',
+        mockExec,
+      );
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(result.hasIssues, true);
+      assert.strictEqual(result.exitCode, 1);
+      assert.strictEqual(result.stdout, 'json output');
+    });
+
+    test('resolves with failure on exec error (exit code 2+)', async () => {
+      const err = Object.assign(new Error('fail'), { code: 2 });
+      const mockExec = sinon.stub().yields(err, '', 'stderr text');
+      const result = await execCommand('docscribe', ['file.rb'], '/tmp', mockExec);
       assert.strictEqual(result.success, false);
-      assert.strictEqual(result.output, '\nstderr text');
+      assert.strictEqual(result.hasIssues, false);
+      assert.strictEqual(result.exitCode, 2);
+      assert.strictEqual(result.stderr, 'stderr text');
     });
 
     test('merges stderr into output', async () => {
       const mockExec = sinon.stub().yields(null, 'stdout', 'stderr');
       const result = await execCommand('bundle', ['exec', 'docscribe'], '/tmp', mockExec);
       assert.strictEqual(result.success, true);
+      assert.strictEqual(result.stdout, 'stdout');
+      assert.strictEqual(result.stderr, 'stderr');
       assert.strictEqual(result.output, 'stdout\nstderr');
     });
   });

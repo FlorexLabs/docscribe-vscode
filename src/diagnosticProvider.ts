@@ -2,72 +2,106 @@ import * as vscode from 'vscode';
 import { runDocscribe, findProjectRoot } from './docscribeRunner';
 import * as path from 'path';
 
-/** An issue parsed from a single line of explain output. */
-interface ParsedIssue {
-  /** 1-based line number. */
-  line: number;
-  /** Human-readable description of what is missing. */
+/**
+ * A single offense from docscribe's JSON output (RuboCop-compatible format).
+ */
+interface JsonOffense {
+  severity: string;
+  cop_name: string;
   message: string;
+  corrected: boolean;
+  correctable: boolean;
+  location: {
+    start_line: number;
+    start_column: number;
+    last_line: number;
+    last_column: number;
+  };
 }
 
-/** Diagnostics grouped per file. */
+/**
+ * A file entry in docscribe's JSON output.
+ */
+interface JsonFileEntry {
+  path: string;
+  offenses: JsonOffense[];
+}
+
+/**
+ * Top-level docscribe JSON output structure.
+ */
+interface JsonOutput {
+  metadata: {
+    docscribe_version: string;
+    ruby_version: string;
+  };
+  files: JsonFileEntry[];
+  summary: {
+    offense_count: number;
+    target_file_count: number;
+    inspected_file_count: number;
+    error_count: number;
+  };
+}
+
+/**
+ * Diagnostics grouped per file.
+ */
 interface FileDiagnostics {
   /** List of issues found in the file. */
-  issues: ParsedIssue[];
+  issues: { line: number; message: string; severity: string; copName: string }[];
   /** Whether docscribe reported an error for this file. */
   error: boolean;
 }
 
 /**
- * Parses docscribe `--explain --verbose` output into a per-file map of issues.
+ * Parses docscribe `--format json` output into a per-file map of issues.
  *
- * Expected output format per line:
- * - `OK path/to/file.rb` — file is clean
- * - `FAIL path/to/file.rb` — file has issues
- * - `ERR path/to/file.rb` — error while checking
- * - `  - method name at line N` — specific issue under a FAIL entry
+ * The JSON format (docscribe ≥ 1.5.0) is RuboCop-compatible:
+ * ```json
+ * {
+ *   "metadata": { ... },
+ *   "files": [{
+ *     "path": "path/to/file.rb",
+ *     "offenses": [{
+ *       "severity": "convention",
+ *       "cop_name": "Docscribe/MissingParam",
+ *       "message": "missing @param for name at line 10",
+ *       "location": { "start_line": 10, ... }
+ *     }]
+ *   }],
+ *   "summary": { ... }
+ * }
+ * ```
  *
- * @param output - Raw stdout from `docscribe --explain --verbose`.
+ * @param output - Raw stdout from `docscribe --format json`.
  * @returns A map of relative file paths to their diagnostics.
  */
-export function parseExplainOutput(output: string): Map<string, FileDiagnostics> {
+export function parseJsonOutput(output: string): Map<string, FileDiagnostics> {
   const files = new Map<string, FileDiagnostics>();
-  let currentFile: string | null = null;
-  let currentIssues: ParsedIssue[] = [];
 
-  const lineRe = /at line (\d+)/;
-
-  for (const rawLine of output.split('\n')) {
-    const line = rawLine.trimEnd();
-
-    if (line.startsWith('OK ') || line.startsWith('FAIL ') || line.startsWith('ERR ')) {
-      if (currentFile) {
-        files.set(currentFile, { issues: currentIssues, error: false });
-      }
-
-      const sep = line.indexOf(' ');
-      const status = line.substring(0, sep);
-      currentFile = line.substring(sep + 1);
-      currentIssues = [];
-      const isErr = status === 'ERR';
-
-      if (isErr) {
-        files.set(currentFile, { issues: [], error: true });
-        currentFile = null;
-      }
-    } else if (currentFile && line.startsWith('  - ')) {
-      const match = line.match(lineRe);
-      if (match) {
-        currentIssues.push({
-          line: parseInt(match[1], 10),
-          message: line.replace(/^\s*-\s*/, ''),
-        });
-      }
-    }
+  let parsed: JsonOutput;
+  try {
+    parsed = JSON.parse(output) as JsonOutput;
+  } catch {
+    return files;
   }
 
-  if (currentFile) {
-    files.set(currentFile, { issues: currentIssues, error: false });
+  if (!parsed.files || !Array.isArray(parsed.files)) {
+    return files;
+  }
+
+  for (const file of parsed.files) {
+    if (!file.offenses || file.offenses.length === 0) continue;
+
+    const issues = file.offenses.map((o) => ({
+      line: o.location.start_line,
+      message: o.message,
+      severity: o.severity,
+      copName: o.cop_name,
+    }));
+
+    files.set(file.path, { issues, error: false });
   }
 
   return files;
@@ -102,15 +136,15 @@ export async function checkDocument(document: vscode.TextDocument): Promise<void
   const result = await runDocscribe({
     file: uri.fsPath,
     strategy: 'check',
-    explain: true,
+    json: true,
   });
 
-  if (!result.success && !result.output) {
+  if (!result.success && !result.stdout) {
     collection.delete(uri);
     return;
   }
 
-  const files = parseExplainOutput(result.output);
+  const files = parseJsonOutput(result.stdout);
   const fileKey = path.relative(root, uri.fsPath);
   const fileDiagnostics = files.get(fileKey) || files.get(uri.fsPath);
 
@@ -122,8 +156,13 @@ export async function checkDocument(document: vscode.TextDocument): Promise<void
   const diagnostics: vscode.Diagnostic[] = fileDiagnostics.issues.map((issue) => {
     const line = Math.max(0, issue.line - 1);
     const range = new vscode.Range(line, 0, line, document.lineAt(line).text.length);
-    const diag = new vscode.Diagnostic(range, issue.message, vscode.DiagnosticSeverity.Warning);
+    const severity =
+      issue.severity === 'fatal'
+        ? vscode.DiagnosticSeverity.Error
+        : vscode.DiagnosticSeverity.Warning;
+    const diag = new vscode.Diagnostic(range, issue.message, severity);
     diag.source = 'docscribe';
+    diag.code = issue.copName;
     return diag;
   });
 

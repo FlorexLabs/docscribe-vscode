@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { runDocscribe, type RunResult } from './docscribeRunner';
 import { createDiagnosticProvider, checkDocument } from './diagnosticProvider';
 import { DocscribeCodeActionProvider, applyFix } from './codeActionProvider';
+import { DocscribeFoldingRangeProvider, getCommentBlockStartLines } from './foldingProvider';
 
 let outputChannel: vscode.OutputChannel;
 let statusBarItem: vscode.StatusBarItem;
@@ -122,6 +123,46 @@ export function activate(context: vscode.ExtensionContext) {
     ),
   ];
 
+  const foldingProvider = vscode.languages.registerFoldingRangeProvider(
+    [{ language: 'ruby' }, { pattern: '**/*.rake' }],
+    new DocscribeFoldingRangeProvider(),
+  );
+
+  async function foldCommentBlocks(editor: vscode.TextEditor): Promise<void> {
+    const startLines = getCommentBlockStartLines(editor.document);
+    if (startLines.length === 0) return;
+
+    const originalSelection = editor.selection;
+    for (const line of startLines) {
+      const pos = new vscode.Position(line, 0);
+      editor.selection = new vscode.Selection(pos, pos);
+      await vscode.commands.executeCommand('editor.fold');
+    }
+    editor.selection = originalSelection;
+  }
+
+  const autoFoldedDocs = new Set<string>();
+
+  const editorListener = vscode.window.onDidChangeActiveTextEditor(async (editor) => {
+    if (!editor || !['ruby', 'rake'].includes(editor.document.languageId)) return;
+    if (autoFoldedDocs.has(editor.document.uri.toString())) return;
+
+    const config = vscode.workspace.getConfiguration('docscribe');
+    if (!config.get<boolean>('foldComments', false)) return;
+
+    autoFoldedDocs.add(editor.document.uri.toString());
+    setTimeout(() => foldCommentBlocks(editor), 200);
+  });
+
+  const toggleFoldCmd = vscode.commands.registerCommand(
+    'docscribe.toggleFoldComments',
+    async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || !['ruby', 'rake'].includes(editor.document.languageId)) return;
+      await foldCommentBlocks(editor);
+    },
+  );
+
   context.subscriptions.push(
     checkFileCmd,
     checkWorkspaceCmd,
@@ -130,5 +171,8 @@ export function activate(context: vscode.ExtensionContext) {
     diagProvider,
     fixCmd,
     ...codeActionProviders,
+    foldingProvider,
+    editorListener,
+    toggleFoldCmd,
   );
 }

@@ -1,10 +1,8 @@
 import * as vscode from 'vscode';
-import { runDocscribe, findProjectRoot } from './docscribeRunner';
+import { runDocscribe, findProjectRoot, type RunResult } from './docscribeRunner';
 import * as path from 'path';
+import { minimatch } from 'minimatch';
 
-/**
- * A single offense from docscribe's JSON output (RuboCop-compatible format).
- */
 interface JsonOffense {
   severity: string;
   cop_name: string;
@@ -19,17 +17,11 @@ interface JsonOffense {
   };
 }
 
-/**
- * A file entry in docscribe's JSON output.
- */
 interface JsonFileEntry {
   path: string;
   offenses: JsonOffense[];
 }
 
-/**
- * Top-level docscribe JSON output structure.
- */
 interface JsonOutput {
   metadata: {
     docscribe_version: string;
@@ -44,39 +36,11 @@ interface JsonOutput {
   };
 }
 
-/**
- * Diagnostics grouped per file.
- */
 interface FileDiagnostics {
-  /** List of issues found in the file. */
   issues: { line: number; message: string; severity: string; copName: string }[];
-  /** Whether docscribe reported an error for this file. */
   error: boolean;
 }
 
-/**
- * Parses docscribe `--format json` output into a per-file map of issues.
- *
- * The JSON format (docscribe ≥ 1.5.0) is RuboCop-compatible:
- * ```json
- * {
- *   "metadata": { ... },
- *   "files": [{
- *     "path": "path/to/file.rb",
- *     "offenses": [{
- *       "severity": "convention",
- *       "cop_name": "Docscribe/MissingParam",
- *       "message": "missing @param for name at line 10",
- *       "location": { "start_line": 10, ... }
- *     }]
- *   }],
- *   "summary": { ... }
- * }
- * ```
- *
- * @param output - Raw stdout from `docscribe --format json`.
- * @returns A map of relative file paths to their diagnostics.
- */
 export function parseJsonOutput(output: string): Map<string, FileDiagnostics> {
   const files = new Map<string, FileDiagnostics>();
 
@@ -107,30 +71,32 @@ export function parseJsonOutput(output: string): Map<string, FileDiagnostics> {
   return files;
 }
 
-/** Global diagnostic collection shared across all documents. */
 const collection = vscode.languages.createDiagnosticCollection('docscribe');
 
-/**
- * Checks a Ruby or Rake file for undocumented methods and updates VS Code diagnostics.
- *
- * Runs docscribe in check + json mode, parses the output,
- * and sets diagnostics on the document URI. Clears diagnostics
- * for non-Ruby/non-Rake files or when no project root is found.
- *
- * @param document - The text document to check.
- */
-export async function checkDocument(document: vscode.TextDocument): Promise<void> {
+function isIgnored(filePath: string): boolean {
+  const config = vscode.workspace.getConfiguration('docscribe');
+  const patterns = config.get<string[]>('ignorePatterns', []);
+  if (patterns.length === 0) return false;
+  return patterns.some((p) => minimatch(filePath, p, { dot: true }));
+}
+
+export async function checkDocument(document: vscode.TextDocument): Promise<RunResult | null> {
   const uri = document.uri;
 
   if (!['ruby', 'rake'].includes(document.languageId)) {
     collection.delete(uri);
-    return;
+    return null;
+  }
+
+  if (isIgnored(uri.fsPath)) {
+    collection.delete(uri);
+    return null;
   }
 
   const root = findProjectRoot(uri.fsPath);
   if (!root) {
     collection.delete(uri);
-    return;
+    return null;
   }
 
   const result = await runDocscribe({
@@ -141,7 +107,7 @@ export async function checkDocument(document: vscode.TextDocument): Promise<void
 
   if (!result.success && !result.stdout) {
     collection.delete(uri);
-    return;
+    return result;
   }
 
   const files = parseJsonOutput(result.stdout);
@@ -150,7 +116,7 @@ export async function checkDocument(document: vscode.TextDocument): Promise<void
 
   if (!fileDiagnostics || fileDiagnostics.error) {
     collection.delete(uri);
-    return;
+    return result;
   }
 
   const diagnostics: vscode.Diagnostic[] = fileDiagnostics.issues.map((issue) => {
@@ -167,27 +133,26 @@ export async function checkDocument(document: vscode.TextDocument): Promise<void
   });
 
   collection.set(uri, diagnostics);
+  return result;
 }
 
-/**
- * Creates the diagnostic provider that listens to document save/open events.
- *
- * On save: checks if `docscribe.runOnSave` is enabled and runs diagnostics.
- * On open: runs diagnostics for Ruby and Rake files immediately.
- *
- * @returns A disposable that cleans up the collection and event listeners.
- */
-export function createDiagnosticProvider(): vscode.Disposable {
+export function createDiagnosticProvider(
+  onCheckResult?: (result: RunResult) => void,
+): vscode.Disposable {
   const onSave = vscode.workspace.onDidSaveTextDocument(async (doc) => {
     const config = vscode.workspace.getConfiguration('docscribe');
     if (!config.get<boolean>('runOnSave', true)) return;
-    await checkDocument(doc);
+    const result = await checkDocument(doc);
+    if (result && onCheckResult) onCheckResult(result);
   });
 
   const onOpen = vscode.workspace.onDidOpenTextDocument(async (doc) => {
-    if (['ruby', 'rake'].includes(doc.languageId)) {
-      await checkDocument(doc);
-    }
+    if (!['ruby', 'rake'].includes(doc.languageId)) return;
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: 'DocScribe' },
+      () => checkDocument(doc),
+    );
+    if (result && onCheckResult) onCheckResult(result);
   });
 
   return vscode.Disposable.from(collection, onSave, onOpen);

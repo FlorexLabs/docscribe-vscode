@@ -105,6 +105,14 @@
           "type": "boolean",
           "default": true,
           "description": "Use RBS signatures for @param/@return type inference"
+        },
+        "docscribe.ignorePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Glob patterns for files to ignore (e.g. **/vendor/**, **/spec/**)"
         }
       }
     }
@@ -141,5 +149,8 @@
     "sinon": "^22.0.0",
     "typedoc": "^0.28.19",
     "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "minimatch": "^10.2.5"
   }
 }

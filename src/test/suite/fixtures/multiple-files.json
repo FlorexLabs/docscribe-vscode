@@ -1,0 +1,67 @@
+{
+  "metadata": {
+    "docscribe_version": "1.5.0",
+    "ruby_version": "3.2.0"
+  },
+  "files": [
+    {
+      "path": "app/models/user.rb",
+      "offenses": [
+        {
+          "severity": "convention",
+          "cop_name": "Docscribe/MissingParam",
+          "message": "missing @param for name at line 15",
+          "corrected": false,
+          "correctable": true,
+          "location": {
+            "start_line": 15,
+            "start_column": 1,
+            "last_line": 15,
+            "last_column": 1
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/controllers/posts_controller.rb",
+      "offenses": [
+        {
+          "severity": "convention",
+          "cop_name": "Docscribe/MissingParam",
+          "message": "missing @param for id at line 5",
+          "corrected": false,
+          "correctable": true,
+          "location": {
+            "start_line": 5,
+            "start_column": 1,
+            "last_line": 5,
+            "last_column": 1
+          }
+        },
+        {
+          "severity": "convention",
+          "cop_name": "Docscribe/MissingReturn",
+          "message": "missing @return at line 12",
+          "corrected": false,
+          "correctable": true,
+          "location": {
+            "start_line": 12,
+            "start_column": 1,
+            "last_line": 12,
+            "last_column": 1
+          }
+        }
+      ]
+    },
+    {
+      "path": "app/models/post.rb",
+      "offenses": []
+    }
+  ],
+  "summary": {
+    "offense_count": 3,
+    "target_file_count": 3,
+    "inspected_file_count": 3,
+    "error_count": 0
+  }
+}

@@ -5,6 +5,8 @@ import * as os from 'os';
 import * as sinon from 'sinon';
 import { findProjectRoot, execCommand } from '../../docscribeRunner';
 
+const fixturesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'test', 'suite', 'fixtures');
+
 suite('docscribeRunner', () => {
   let tmpDir: string;
 
@@ -19,7 +21,7 @@ suite('docscribeRunner', () => {
 
     test('returns directory containing Gemfile', () => {
       fs.mkdirSync(path.join(tmpDir, 'subdir'), { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, 'Gemfile'), '');
+      fs.copyFileSync(path.join(fixturesDir, 'Gemfile'), path.join(tmpDir, 'Gemfile'));
       const result = findProjectRoot(path.join(tmpDir, 'subdir'));
       assert.strictEqual(result, fs.realpathSync(tmpDir));
     });
@@ -32,7 +34,7 @@ suite('docscribeRunner', () => {
     test('walks up directories to find Gemfile', () => {
       const subdir = path.join(tmpDir, 'a', 'b', 'c');
       fs.mkdirSync(subdir, { recursive: true });
-      fs.writeFileSync(path.join(tmpDir, 'Gemfile'), '');
+      fs.copyFileSync(path.join(fixturesDir, 'Gemfile'), path.join(tmpDir, 'Gemfile'));
       const result = findProjectRoot(subdir);
       assert.strictEqual(result, fs.realpathSync(tmpDir));
     });
@@ -47,6 +49,11 @@ suite('docscribeRunner', () => {
     test('stops at filesystem root', () => {
       const result = findProjectRoot('/');
       assert.strictEqual(result, null);
+    });
+
+    test('detects Gemfile in the fixtures directory', () => {
+      const result = findProjectRoot(fixturesDir);
+      assert.strictEqual(result, fs.realpathSync(fixturesDir));
     });
   });
 

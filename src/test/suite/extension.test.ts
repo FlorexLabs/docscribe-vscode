@@ -73,4 +73,13 @@ suite('DocScribe Extension', () => {
       assert.ok(aggressiveFix.when.includes('ruby'));
     });
   });
+
+  suite('B2: ignorePatterns setting', () => {
+    test('should have ignorePatterns configuration', () => {
+      const prop = pkg.contributes.configuration.properties['docscribe.ignorePatterns'];
+      assert.ok(prop);
+      assert.strictEqual(prop.type, 'array');
+      assert.deepStrictEqual(prop.default, []);
+    });
+  });
 });

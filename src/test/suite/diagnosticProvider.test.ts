@@ -192,5 +192,39 @@ suite('diagnosticProvider', () => {
       assert.strictEqual(file.issues.length, 1);
       assert.strictEqual(file.issues[0].severity, 'fatal');
     });
+
+    test('parses .rake files the same as .rb files', () => {
+      const json = JSON.stringify({
+        metadata: { docscribe_version: '1.5.0', ruby_version: '3.2.0' },
+        files: [
+          {
+            path: 'lib/tasks/db.rake',
+            offenses: [
+              {
+                severity: 'convention',
+                cop_name: 'Docscribe/MissingParam',
+                message: 'missing @param for namespace at line 5',
+                corrected: false,
+                correctable: true,
+                location: { start_line: 5, start_column: 1, last_line: 5, last_column: 1 },
+              },
+            ],
+          },
+        ],
+        summary: {
+          offense_count: 1,
+          target_file_count: 1,
+          inspected_file_count: 1,
+          error_count: 0,
+        },
+      });
+
+      const result = parseJsonOutput(json);
+      assert.strictEqual(result.size, 1);
+      const file = result.get('lib/tasks/db.rake');
+      assert.ok(file);
+      assert.strictEqual(file.issues[0].line, 5);
+      assert.strictEqual(file.issues[0].copName, 'Docscribe/MissingParam');
+    });
   });
 });

@@ -21,17 +21,17 @@ async function withProgress<T>(title: string, task: () => Promise<T>): Promise<T
 }
 
 /**
- * Checks that the active editor has a Ruby file open.
+ * Checks that the active editor has a Ruby or Rake file open.
  *
  * Shows a warning and returns `false` if the active editor
- * is missing or the language is not Ruby.
+ * is missing or the language is neither Ruby nor Rake.
  *
- * @returns `true` if a Ruby file is active, `false` otherwise.
+ * @returns `true` if a Ruby/Rake file is active, `false` otherwise.
  */
 function requireRubyFile(): boolean {
   const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.document.languageId !== 'ruby') {
-    vscode.window.showWarningMessage('Open a Ruby file first');
+  if (!editor || !['ruby', 'rake'].includes(editor.document.languageId)) {
+    vscode.window.showWarningMessage('Open a Ruby or Rake file first');
     return false;
   }
   return true;
@@ -70,8 +70,9 @@ function showResult(result: RunResult): void {
  * - `docscribe.aggressiveFix`
  * - `docscribe.applyFix`
  *
- * Also registers the diagnostic provider and code action provider
- * for Ruby files. All disposables are added to `context.subscriptions`.
+ * Also registers the diagnostic provider (for Ruby and Rake files)
+ * and code action providers (ruby language and Rake file pattern).
+ * All disposables are added to `context.subscriptions`.
  *
  * @param context - The extension context provided by VS Code on activation.
  */
@@ -123,11 +124,18 @@ export function activate(context: vscode.ExtensionContext) {
     applyFix(uri);
   });
 
-  const codeActionProvider = vscode.languages.registerCodeActionsProvider(
-    { language: 'ruby' },
-    new DocscribeCodeActionProvider(),
-    { providedCodeActionKinds: DocscribeCodeActionProvider.providedCodeActionKinds },
-  );
+  const codeActionProviders = [
+    vscode.languages.registerCodeActionsProvider(
+      { language: 'ruby' },
+      new DocscribeCodeActionProvider(),
+      { providedCodeActionKinds: DocscribeCodeActionProvider.providedCodeActionKinds },
+    ),
+    vscode.languages.registerCodeActionsProvider(
+      { pattern: '**/*.rake' },
+      new DocscribeCodeActionProvider(),
+      { providedCodeActionKinds: DocscribeCodeActionProvider.providedCodeActionKinds },
+    ),
+  ];
 
   context.subscriptions.push(
     checkFileCmd,
@@ -136,6 +144,6 @@ export function activate(context: vscode.ExtensionContext) {
     aggressiveFixCmd,
     diagProvider,
     fixCmd,
-    codeActionProvider,
+    ...codeActionProviders,
   );
 }

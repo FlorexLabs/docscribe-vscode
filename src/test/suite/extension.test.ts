@@ -21,6 +21,7 @@ suite('DocScribe Extension', () => {
     assert.ok(docscribeCommands.includes('docscribe.safeFix'));
     assert.ok(docscribeCommands.includes('docscribe.aggressiveFix'));
     assert.ok(docscribeCommands.includes('docscribe.applyFix'));
+    assert.ok(docscribeCommands.includes('docscribe.toggleFoldComments'));
   });
 
   suite('A1: activationEvents', () => {
@@ -80,6 +81,15 @@ suite('DocScribe Extension', () => {
       assert.ok(prop);
       assert.strictEqual(prop.type, 'array');
       assert.deepStrictEqual(prop.default, []);
+    });
+  });
+
+  suite('C3: foldComments setting', () => {
+    test('should have foldComments configuration', () => {
+      const prop = pkg.contributes.configuration.properties['docscribe.foldComments'];
+      assert.ok(prop);
+      assert.strictEqual(prop.type, 'boolean');
+      assert.strictEqual(prop.default, false);
     });
   });
 });

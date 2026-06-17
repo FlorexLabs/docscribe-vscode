@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { runDocscribe, type RunResult } from './docscribeRunner';
 import { createDiagnosticProvider, checkDocument } from './diagnosticProvider';
 import { DocscribeCodeActionProvider, applyFix } from './codeActionProvider';
+import { DocscribeFoldingRangeProvider } from './foldingProvider';
 
 let outputChannel: vscode.OutputChannel;
 let statusBarItem: vscode.StatusBarItem;
@@ -122,6 +123,20 @@ export function activate(context: vscode.ExtensionContext) {
     ),
   ];
 
+  const foldingProvider = vscode.languages.registerFoldingRangeProvider(
+    [{ language: 'ruby' }, { pattern: '**/*.rake' }],
+    new DocscribeFoldingRangeProvider(),
+  );
+
+  const toggleFoldCmd = vscode.commands.registerCommand(
+    'docscribe.toggleFoldComments',
+    async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || !['ruby', 'rake'].includes(editor.document.languageId)) return;
+      await vscode.commands.executeCommand('editor.foldAllMarkerRegions');
+    },
+  );
+
   context.subscriptions.push(
     checkFileCmd,
     checkWorkspaceCmd,
@@ -130,5 +145,7 @@ export function activate(context: vscode.ExtensionContext) {
     diagProvider,
     fixCmd,
     ...codeActionProviders,
+    foldingProvider,
+    toggleFoldCmd,
   );
 }

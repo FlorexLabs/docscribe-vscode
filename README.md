@@ -52,7 +52,7 @@ gem "rbs", group: :development
 
 ### Commands
 
-All commands are available via **Command Palette** (`Cmd+Shift+P` / `Ctrl+Shift+P` → type "DocScribe").
+All commands are available via **Command Palette** (`Cmd+Shift+P` / `Ctrl+Shift+P` -> type "DocScribe").
 
 | Command                                             | Keybinding (macOS)  | Description                                           |
 |-----------------------------------------------------|---------------------|-------------------------------------------------------|
@@ -66,7 +66,7 @@ All commands are available via **Command Palette** (`Cmd+Shift+P` / `Ctrl+Shift+
 Chording (`Cmd+Shift+D` followed by `W`/`S`/`A`/`U`) works as a chord sequence — press and release `Cmd+Shift+D`,
 then press the second key within the chord timeout.
 
-Right-click in a Ruby file → **DocScribe** context menu:
+Right-click in a Ruby file -> **DocScribe** context menu:
 
 | Menu item              | Action            |
 |------------------------|-------------------|

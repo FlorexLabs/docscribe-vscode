@@ -58,6 +58,10 @@
       {
         "command": "docscribe.toggleFoldComments",
         "title": "DocScribe: Toggle fold YARD comments"
+      },
+      {
+        "command": "docscribe.updateTypes",
+        "title": "DocScribe: Update types from RBS"
       }
     ],
     "keybindings": [
@@ -65,6 +69,30 @@
         "command": "docscribe.checkFile",
         "key": "ctrl+shift+d",
         "mac": "cmd+shift+d",
+        "when": "editorLangId == ruby"
+      },
+      {
+        "command": "docscribe.checkWorkspace",
+        "key": "ctrl+shift+d w",
+        "mac": "cmd+shift+d w",
+        "when": "editorLangId == ruby"
+      },
+      {
+        "command": "docscribe.safeFix",
+        "key": "ctrl+shift+d s",
+        "mac": "cmd+shift+d s",
+        "when": "editorLangId == ruby"
+      },
+      {
+        "command": "docscribe.aggressiveFix",
+        "key": "ctrl+shift+d a",
+        "mac": "cmd+shift+d a",
+        "when": "editorLangId == ruby"
+      },
+      {
+        "command": "docscribe.updateTypes",
+        "key": "ctrl+shift+d u",
+        "mac": "cmd+shift+d u",
         "when": "editorLangId == ruby"
       }
     ],
@@ -84,6 +112,11 @@
           "command": "docscribe.aggressiveFix",
           "when": "editorLangId == ruby",
           "group": "1_modification@2"
+        },
+        {
+          "command": "docscribe.updateTypes",
+          "when": "editorLangId == ruby",
+          "group": "1_modification@3"
         }
       ]
     },
@@ -122,6 +155,11 @@
           "type": "boolean",
           "default": false,
           "description": "Collapse YARD comment blocks by default when opening a file"
+        },
+        "docscribe.omitBoilerplate": {
+          "type": "boolean",
+          "default": false,
+          "description": "Omit boilerplate description text from generated YARD docs (passes -B to docscribe)"
         }
       }
     }

@@ -2,7 +2,7 @@
   "name": "docscribe-vscode",
   "displayName": "DocScribe",
   "description": "Auto-generate inline YARD documentation for Ruby methods using docscribe",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "unurgunite",
   "license": "MIT",
   "icon": "icon.png",

@@ -1,5 +1,14 @@
 # DocScribe
 
+[![VS Code Marketplace](https://img.shields.io/badge/VS%20Code-Marketplace-blue?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=unurgunite.docscribe-vscode)
+[![CI](https://github.com/FlorexLabs/docscribe-vscode/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/FlorexLabs/docscribe-vscode/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/FlorexLabs/docscribe-vscode.svg)](https://github.com/FlorexLabs/docscribe-vscode/blob/master/LICENSE.txt)
+[![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.0-red.svg)](#requirements)
+
+<p>
+  <img src="icons/icon_256x256.png" alt="DocScribe logo" width="96">
+</p>
+
 **DocScribe** is a VS Code extension that auto-generates inline YARD documentation for Ruby methods
 using [docscribe](https://github.com/unurgunite/docscribe) — a Ruby gem that analyzes AST and suggests YARD-compatible
 documentation. Compatible with **docscribe >= 1.5.0**.

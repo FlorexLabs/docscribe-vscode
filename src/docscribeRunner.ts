@@ -16,8 +16,9 @@ export interface RunOptions {
    * - `check` — only report missing docs
    * - `safe` — add docs only to undocumented methods
    * - `aggressive` — replace all existing YARD docs
+   * - `updateTypes` — two-pass: aggressive then safe, updates types from RBS
    */
-  strategy?: 'check' | 'safe' | 'aggressive';
+  strategy?: 'check' | 'safe' | 'aggressive' | 'updateTypes';
   /** If true (default), uses `--format json` for machine-readable output. */
   json?: boolean;
 }
@@ -99,6 +100,7 @@ export function gemfileHasRbs(gemfilePath: string): boolean {
  * @param strategy - Fixing strategy (`check`, `safe`, `aggressive`).
  * @param json - If true, adds `--format json` (for check mode).
  * @param useRbs - Whether to pass `--rbs-collection`.
+ * @param omitBoilerplate - Whether to pass `-B` to omit boilerplate text.
  * @param filePath - Optional file path to pass as the last argument.
  * @returns An array of CLI argument strings.
  */
@@ -106,19 +108,25 @@ function getCommandArgs(
   strategy: string,
   json: boolean,
   useRbs: boolean,
+  omitBoilerplate: boolean,
   filePath?: string,
 ): string[] {
   const args: string[] = [];
   if (strategy === 'safe') {
     args.push('-a');
   } else if (strategy === 'aggressive') {
-    args.push('-A');
+    args.push('-A', '-k');
+  } else if (strategy === 'updateTypes') {
+    args.push('update_types', '-A', '-k');
   }
-  if (json && strategy === 'check') {
+  if (json && (strategy === 'check' || strategy === 'updateTypes')) {
     args.push('--format', 'json');
   }
   if (useRbs) {
     args.push('--rbs-collection');
+  }
+  if (omitBoilerplate) {
+    args.push('-B');
   }
   if (filePath) {
     args.push(filePath);
@@ -243,7 +251,14 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
   const json = options.json ?? true;
   const rbsEnabled = config.get<boolean>('useRbs', false);
   const useRbs = rbsEnabled && gemfileHasRbs(path.join(projectRoot, 'Gemfile'));
-  const args = getCommandArgs(strategy, json, useRbs, options.workspace ? undefined : filePath);
+  const omitBoilerplate = config.get<boolean>('omitBoilerplate', false);
+  const args = getCommandArgs(
+    strategy,
+    json,
+    useRbs,
+    omitBoilerplate,
+    options.workspace ? undefined : filePath,
+  );
 
   const useBundleExec = config.get<boolean>('useBundleExec', true);
   const commandPath = config.get<string>('commandPath', 'docscribe');

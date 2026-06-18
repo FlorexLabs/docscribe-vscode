@@ -65,12 +65,18 @@ suite('codeActionProvider', () => {
       );
 
       assert.ok(result);
-      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result.length, 3);
       assert.strictEqual(result[0].title, 'DocScribe: Missing documentation at line 15');
       assert.strictEqual(result[0].kind, vscode.CodeActionKind.QuickFix);
       assert.ok(result[0].isPreferred);
       assert.strictEqual(result[0].command?.command, 'docscribe.applyFix');
       assert.strictEqual(result[0].diagnostics?.length, 1);
+      assert.strictEqual(result[1].title, 'DocScribe: fix all in file (safe)');
+      assert.strictEqual(result[1].command?.command, 'docscribe.applyFix');
+      assert.strictEqual(result[1].diagnostics, undefined);
+      assert.strictEqual(result[2].title, 'DocScribe: fix all in file (aggressive)');
+      assert.strictEqual(result[2].command?.command, 'docscribe.applyFix');
+      assert.strictEqual(result[2].diagnostics, undefined);
     });
 
     test('returns multiple CodeActions for multiple docscribe diagnostics', () => {
@@ -88,9 +94,11 @@ suite('codeActionProvider', () => {
       );
 
       assert.ok(result);
-      assert.strictEqual(result.length, 2);
+      assert.strictEqual(result.length, 4);
       assert.strictEqual(result[0].title, 'DocScribe: Issue 1');
       assert.strictEqual(result[1].title, 'DocScribe: Issue 2');
+      assert.strictEqual(result[2].title, 'DocScribe: fix all in file (safe)');
+      assert.strictEqual(result[3].title, 'DocScribe: fix all in file (aggressive)');
     });
   });
 });

@@ -1,5 +1,14 @@
 # DocScribe
 
+[![VS Code Marketplace](https://img.shields.io/badge/VS%20Code-Marketplace-blue?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=unurgunite.docscribe-vscode)
+[![CI](https://github.com/FlorexLabs/docscribe-vscode/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/FlorexLabs/docscribe-vscode/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/FlorexLabs/docscribe-vscode.svg)](https://github.com/FlorexLabs/docscribe-vscode/blob/master/LICENSE.txt)
+[![Ruby](https://img.shields.io/badge/ruby-%3E%3D%202.7-red.svg)](#requirements)
+
+<p>
+  <img src="icons/icon_256x256.png" alt="DocScribe logo" width="96">
+</p>
+
 **DocScribe** is a VS Code extension that auto-generates inline YARD documentation for Ruby methods
 using [docscribe](https://github.com/unurgunite/docscribe) — a Ruby gem that analyzes AST and suggests YARD-compatible
 documentation. Compatible with **docscribe >= 1.5.0**.
@@ -8,17 +17,19 @@ documentation. Compatible with **docscribe >= 1.5.0**.
 
 - **Diagnostics** — undocumented methods highlighted directly in the editor on file open or save
 - **Code Actions** — lightbulb quick-fix to generate YARD documentation with one click
-- **RBS type inference** — uses RBS signatures for accurate `@param` and `@return` types (when `gem "rbs"` is in your Gemfile)
+- **RBS type inference** — uses RBS signatures for accurate `@param` and `@return` types (when `gem "rbs"` is in your
+  Gemfile)
 - **Workspace-wide check** — scan all Ruby files in the project
 - **Flexible strategies** — safe (document missing methods only) and aggressive (replace existing docs)
 - **Configurable** — bundle exec, custom command path, ignore patterns, run on save, RBS toggle
-- **Collapsible docs** — fold all YARD comments with `docscribe.toggleFoldComments` or auto-fold on file open via `docscribe.foldComments`
+- **Collapsible docs** — fold all YARD comments with `docscribe.toggleFoldComments` or auto-fold on file open via
+  `docscribe.foldComments`
 - **`.rake` support** — diagnostics and code actions work on Rake files
 - **JSON output** — uses `docscribe --format json` (RuboCop-compatible) for reliable diagnostics parsing
 
 ## Requirements
 
-- **Ruby** (>= 3.0) with Bundler
+- **Ruby** (>= 2.7) with Bundler
 - **docscribe gem** installed globally or in your Gemfile
 
 ```bash
@@ -41,13 +52,39 @@ gem "rbs", group: :development
 
 ### Commands
 
-| Command                                             | Description                                           |
-| --------------------------------------------------- | ----------------------------------------------------- |
-| `DocScribe: Check current file`                     | Analyze the active Ruby file for undocumented methods |
-| `DocScribe: Check entire workspace`                 | Scan all Ruby files in the project                    |
-| `DocScribe: Apply safe fixes to current file`       | Add docs to undocumented methods only                 |
-| `DocScribe: Apply aggressive fixes to current file` | Replace all existing YARD docs                        |
-| `DocScribe: Toggle fold YARD comments`              | Collapse all YARD comment blocks                      |
+All commands are available via **Command Palette** (`Cmd+Shift+P` / `Ctrl+Shift+P` -> type "DocScribe").
+
+| Command                                             | Keybinding (macOS)  | Description                                           |
+|-----------------------------------------------------|---------------------|-------------------------------------------------------|
+| `DocScribe: Check current file`                     | `Cmd+Shift+D`       | Analyze the active Ruby file for undocumented methods |
+| `DocScribe: Check entire workspace`                 | `Cmd+Shift+D` `W`   | Scan all Ruby files in the project                    |
+| `DocScribe: Apply safe fixes to current file`       | `Cmd+Shift+D` `S`   | Add docs to undocumented methods only (`-a`)          |
+| `DocScribe: Apply aggressive fixes to current file` | `Cmd+Shift+D` `A`   | Replace all existing YARD docs (`-A -k`)              |
+| `DocScribe: Update types from RBS`                  | `Cmd+Shift+D` `U`   | Two-pass: aggressive then safe update from RBS        |
+| `DocScribe: Toggle fold YARD comments`              | — (Command Palette) | Collapse all YARD comment blocks in the current file  |
+
+Chording (`Cmd+Shift+D` followed by `W`/`S`/`A`/`U`) works as a chord sequence — press and release `Cmd+Shift+D`,
+then press the second key within the chord timeout.
+
+Right-click in a Ruby file -> **DocScribe** context menu:
+
+| Menu item              | Action            |
+|------------------------|-------------------|
+| Check current file     | `Cmd+Shift+D`     |
+| Apply safe fixes       | `Cmd+Shift+D` `S` |
+| Apply aggressive fixes | `Cmd+Shift+D` `A` |
+| Update types from RBS  | `Cmd+Shift+D` `U` |
+
+The **status bar** shows the last check result:
+
+| Indicator                            | Meaning                   |
+|--------------------------------------|---------------------------|
+| `$(symbol-ruler) DocScribe`          | Not checked yet           |
+| `$(check) DocScribe: OK`             | No issues found           |
+| `$(warning) DocScribe: issues found` | Some methods undocumented |
+| `$(error) DocScribe: error`          | Docscribe run failed      |
+
+Click the status bar item to re-check the current file.
 
 ### Diagnostics
 
@@ -57,6 +94,24 @@ automatically on file save and open.
 ### Code Actions
 
 Click the lightbulb (or press `Cmd+.` / `Ctrl+.`) on an undocumented method and select a fix.
+
+Three actions are available per diagnostic:
+
+| Action                                    | Description                                             |
+|-------------------------------------------|---------------------------------------------------------|
+| `DocScribe: Missing ...`                  | Fix only the selected method                            |
+| `DocScribe: fix all in file (safe)`       | `docscribe -a` — add docs to undocumented methods only  |
+| `DocScribe: fix all in file (aggressive)` | `docscribe -A -k` — rewrite all docs, keep hand-written |
+
+**How the single-method fix works:**
+
+When you fix one method via the lightbulb, the extension runs `docscribe` with `--stdin` on the entire file, then uses
+an **LCS (Longest Common Subsequence)** line-diff to isolate the changed region that overlaps with the diagnostic. Only
+that region is applied to the document — other methods in the file are left untouched.
+
+The diff is computed by building an LCS table between the original and fixed line arrays, then backtracing to group
+additions and deletions into hunks. This avoids external dependencies and keeps the fix precise even with nearby
+unrelated changes.
 
 ### Example
 
@@ -73,7 +128,7 @@ The extension flags methods missing documentation and can auto-generate blocks l
 ### Settings
 
 | Setting                    | Default     | Description                                           |
-| -------------------------- | ----------- | ----------------------------------------------------- |
+|----------------------------|-------------|-------------------------------------------------------|
 | `docscribe.commandPath`    | `docscribe` | Path to the docscribe executable                      |
 | `docscribe.useBundleExec`  | `true`      | Use `bundle exec docscribe`                           |
 | `docscribe.runOnSave`      | `true`      | Check automatically on file save and open             |
@@ -99,7 +154,7 @@ npm install
 ### Scripts
 
 | Script                 | Description                         |
-| ---------------------- | ----------------------------------- |
+|------------------------|-------------------------------------|
 | `npm run compile`      | Compile TypeScript                  |
 | `npm run watch`        | Watch mode                          |
 | `npm run lint`         | Run ESLint                          |

@@ -5,7 +5,6 @@
 .nvmrc
 tsconfig.json
 src/**
-node_modules/**
 eslint.config.mjs
 .github/**
 SECURITY.md

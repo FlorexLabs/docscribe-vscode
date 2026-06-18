@@ -106,9 +106,18 @@ export function activate(context: vscode.ExtensionContext) {
 
   const diagProvider = createDiagnosticProvider(updateStatusBar);
 
-  const fixCmd = vscode.commands.registerCommand('docscribe.applyFix', (uri: vscode.Uri) => {
-    applyFix(uri);
-  });
+  for (const doc of vscode.workspace.textDocuments) {
+    if (['ruby', 'rake'].includes(doc.languageId)) {
+      checkDocument(doc);
+    }
+  }
+
+  const fixCmd = vscode.commands.registerCommand(
+    'docscribe.applyFix',
+    async (uri: vscode.Uri, diagnostic?: vscode.Diagnostic, mode?: 'safe' | 'aggressive') => {
+      await applyFix(uri, diagnostic, mode);
+    },
+  );
 
   const codeActionProviders = [
     vscode.languages.registerCodeActionsProvider(
@@ -163,6 +172,13 @@ export function activate(context: vscode.ExtensionContext) {
     },
   );
 
+  const updateTypesCmd = vscode.commands.registerCommand('docscribe.updateTypes', async () => {
+    const result = await withProgress('DocScribe: updating types from RBS...', () =>
+      runDocscribe({ strategy: 'updateTypes' }),
+    );
+    showResult(result);
+  });
+
   context.subscriptions.push(
     checkFileCmd,
     checkWorkspaceCmd,
@@ -174,5 +190,6 @@ export function activate(context: vscode.ExtensionContext) {
     foldingProvider,
     editorListener,
     toggleFoldCmd,
+    updateTypesCmd,
   );
 }

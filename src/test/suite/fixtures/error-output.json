@@ -1,0 +1,32 @@
+{
+  "metadata": {
+    "docscribe_version": "1.5.0",
+    "ruby_version": "3.2.0"
+  },
+  "files": [
+    {
+      "path": "app/models/user.rb",
+      "offenses": [
+        {
+          "severity": "fatal",
+          "cop_name": "Docscribe/ProcessingError",
+          "message": "Error reading file: Permission denied",
+          "corrected": false,
+          "correctable": false,
+          "location": {
+            "start_line": 1,
+            "start_column": 1,
+            "last_line": 1,
+            "last_column": 1
+          }
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "offense_count": 1,
+    "target_file_count": 1,
+    "inspected_file_count": 0,
+    "error_count": 1
+  }
+}

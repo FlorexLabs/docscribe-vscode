@@ -1,0 +1,119 @@
+import * as path from 'path';
+import * as vscode from 'vscode';
+import { execFile } from 'child_process';
+import { findProjectRoot, gemfileHasRbs } from './docscribeRunner';
+
+/**
+ * Provides quick-fix code actions for docscribe diagnostics.
+ *
+ * Registers a lightbulb action for each `docscribe`-source diagnostic
+ * that triggers the {@link applyFix} command.
+ */
+export class DocscribeCodeActionProvider implements vscode.CodeActionProvider {
+  /** Singleton array of provided action kinds. */
+  public static readonly providedCodeActionKinds = [vscode.CodeActionKind.QuickFix];
+
+  /**
+   * Returns code actions for diagnostics originating from docscribe.
+   *
+   * @param document - The active text document (unused).
+   * @param _range - The selected range (unused).
+   * @param context - Context containing current diagnostics.
+   * @param _token - Cancellation token (unused).
+   * @returns An array of code actions, or `undefined` if none apply.
+   */
+  provideCodeActions(
+    document: vscode.TextDocument,
+    _range: vscode.Range,
+    context: vscode.CodeActionContext,
+    _token: vscode.CancellationToken,
+  ): vscode.CodeAction[] | undefined {
+    const relevantDiags = context.diagnostics.filter((d) => d.source === 'docscribe');
+    if (relevantDiags.length === 0) return undefined;
+
+    return relevantDiags.map((diag) => {
+      const action = new vscode.CodeAction(
+        `DocScribe: ${diag.message}`,
+        vscode.CodeActionKind.QuickFix,
+      );
+      action.command = {
+        command: 'docscribe.applyFix',
+        title: 'Apply docscribe fix',
+        arguments: [document.uri],
+      };
+      action.diagnostics = [diag];
+      action.isPreferred = true;
+      return action;
+    });
+  }
+}
+
+/**
+ * Applies a docscribe fix to a file by piping its content through `--stdin`.
+ *
+ * Reads the file content, passes it to docscribe with the `-a --stdin` flags
+ * (and optionally `--rbs-collection`), then replaces the entire document
+ * with the fixed output.
+ *
+ * @param uri - URI of the file to fix.
+ */
+export async function applyFix(uri: vscode.Uri): Promise<void> {
+  const doc = await vscode.workspace.openTextDocument(uri);
+  const root = findProjectRoot(uri.fsPath);
+  if (!root) {
+    vscode.window.showErrorMessage('No Gemfile found in project tree');
+    return;
+  }
+
+  const code = doc.getText();
+
+  const config = vscode.workspace.getConfiguration('docscribe');
+  const useBundleExec = config.get<boolean>('useBundleExec', true);
+  const commandPath = config.get<string>('commandPath', 'docscribe');
+  const rbsEnabled = config.get<boolean>('useRbs', false);
+  const useRbs = rbsEnabled && gemfileHasRbs(path.join(root, 'Gemfile'));
+
+  const cmd = useBundleExec ? 'bundle' : commandPath;
+  const cmdArgs = useBundleExec
+    ? ['exec', commandPath, '-a', '--stdin', ...(useRbs ? ['--rbs-collection'] : [])]
+    : ['-a', '--stdin', ...(useRbs ? ['--rbs-collection'] : [])];
+
+  const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>(
+    (resolve) => {
+      const child = execFile(
+        cmd,
+        cmdArgs,
+        { cwd: root, maxBuffer: 10 * 1024 * 1024 },
+        (err, stdout, stderr) => {
+          resolve({
+            stdout: stdout || '',
+            stderr: stderr || '',
+            code: err ? (typeof err.code === 'number' ? err.code : 2) : 0,
+          });
+        },
+      );
+      if (child.stdin) {
+        child.stdin.write(code);
+        child.stdin.end();
+      }
+    },
+  );
+
+  if ((result.code ?? 2) >= 2 || (!result.stdout && !result.stderr)) {
+    vscode.window.showErrorMessage('DocScribe: failed to apply fix');
+    return;
+  }
+
+  const fixedCode = result.stdout || result.stderr;
+
+  const lastLine = doc.lineCount - 1;
+  const lastCol = doc.lineAt(lastLine).text.length;
+  const fullRange = new vscode.Range(0, 0, lastLine, lastCol);
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(uri, fullRange, fixedCode);
+
+  const applied = await vscode.workspace.applyEdit(edit);
+  if (applied) {
+    vscode.window.setStatusBarMessage('$(check) DocScribe: fix applied', 3000);
+  }
+}

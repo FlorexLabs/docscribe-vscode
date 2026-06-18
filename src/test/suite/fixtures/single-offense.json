@@ -1,0 +1,32 @@
+{
+  "metadata": {
+    "docscribe_version": "1.5.0",
+    "ruby_version": "3.2.0"
+  },
+  "files": [
+    {
+      "path": "app/models/user.rb",
+      "offenses": [
+        {
+          "severity": "convention",
+          "cop_name": "Docscribe/MissingParam",
+          "message": "missing @param for name at line 10",
+          "corrected": false,
+          "correctable": true,
+          "location": {
+            "start_line": 10,
+            "start_column": 1,
+            "last_line": 10,
+            "last_column": 1
+          }
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "offense_count": 1,
+    "target_file_count": 1,
+    "inspected_file_count": 1,
+    "error_count": 0
+  }
+}

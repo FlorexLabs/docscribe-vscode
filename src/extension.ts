@@ -1,5 +1,12 @@
 import * as vscode from 'vscode';
-import { runDocscribe, type RunResult } from './docscribeRunner';
+import {
+  runDocscribe,
+  findProjectRoot,
+  detectCapabilities,
+  getCachedCapabilities,
+  type RunResult,
+} from './docscribeRunner';
+import { execFile } from './execAsync';
 import { createDiagnosticProvider, checkDocument } from './diagnosticProvider';
 import { DocscribeCodeActionProvider, applyFix } from './codeActionProvider';
 import { DocscribeFoldingRangeProvider, getCommentBlockStartLines } from './foldingProvider';
@@ -179,6 +186,67 @@ export function activate(context: vscode.ExtensionContext) {
     showResult(result);
   });
 
+  const doctorCmd = vscode.commands.registerCommand('docscribe.doctor', async () => {
+    const channel = vscode.window.createOutputChannel('DocScribe Doctor');
+    channel.clear();
+    channel.appendLine('=== DocScribe Doctor ===');
+    channel.appendLine('');
+
+    try {
+      const rubyResult = await new Promise<string>((resolve) => {
+        execFile('ruby', ['--version'], (err: Error | null, stdout: string) => {
+          resolve(err ? 'Not found' : stdout.trim());
+        });
+      });
+      channel.appendLine(`Ruby: ${rubyResult}`);
+    } catch {
+      channel.appendLine('Ruby: Not found');
+    }
+
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (workspaceFolders) {
+      const rootPath = workspaceFolders[0].uri.fsPath;
+      const projectRoot = findProjectRoot(rootPath);
+      channel.appendLine(`Project root: ${projectRoot || 'Not found (no Gemfile)'}`);
+
+      if (projectRoot) {
+        const caps = getCachedCapabilities() || (await detectCapabilities(projectRoot));
+        if (caps) {
+          channel.appendLine(`DocScribe version: ${caps.version}`);
+          channel.appendLine(
+            `  Server mode: ${caps.hasServerMode ? 'Available' : 'Not available'}`,
+          );
+          channel.appendLine(
+            `  RBS collection: ${caps.hasRbsCollection ? 'Available' : 'Not available'}`,
+          );
+          channel.appendLine(
+            `  Exit code semantics: ${caps.hasExitCodeSemantics ? 'Available' : 'Not available'}`,
+          );
+        } else {
+          channel.appendLine('DocScribe version: Not detected');
+          channel.appendLine('');
+          channel.appendLine('Troubleshooting:');
+          channel.appendLine('  1. Ensure docscribe gem is installed: gem list docscribe');
+          channel.appendLine('  2. Add to Gemfile: gem "docscribe"');
+          channel.appendLine('  3. Run: bundle install');
+        }
+      }
+    }
+
+    const config = vscode.workspace.getConfiguration('docscribe');
+    channel.appendLine('');
+    channel.appendLine('Settings:');
+    channel.appendLine(`  runOnSave: ${config.get('runOnSave')}`);
+    channel.appendLine(`  useBundleExec: ${config.get('useBundleExec')}`);
+    channel.appendLine(`  useRbs: ${config.get('useRbs')}`);
+    channel.appendLine(`  commandPath: ${config.get('commandPath')}`);
+    channel.appendLine(`  ignorePatterns: ${JSON.stringify(config.get('ignorePatterns'))}`);
+    channel.appendLine(`  foldComments: ${config.get('foldComments')}`);
+    channel.appendLine(`  omitBoilerplate: ${config.get('omitBoilerplate')}`);
+
+    channel.show();
+  });
+
   context.subscriptions.push(
     checkFileCmd,
     checkWorkspaceCmd,
@@ -191,5 +259,6 @@ export function activate(context: vscode.ExtensionContext) {
     editorListener,
     toggleFoldCmd,
     updateTypesCmd,
+    doctorCmd,
   );
 }

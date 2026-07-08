@@ -72,6 +72,8 @@ export function parseJsonOutput(output: string): Map<string, FileDiagnostics> {
 }
 
 const collection = vscode.languages.createDiagnosticCollection('docscribe');
+const checkCounters = new Map<string, number>();
+const debounceTimers = new Map<string, NodeJS.Timeout>();
 
 function isIgnored(filePath: string): boolean {
   const config = vscode.workspace.getConfiguration('docscribe');
@@ -81,6 +83,10 @@ function isIgnored(filePath: string): boolean {
 }
 
 export async function checkDocument(document: vscode.TextDocument): Promise<RunResult | null> {
+  const uriKey = document.uri.toString();
+  const currentCheck = (checkCounters.get(uriKey) || 0) + 1;
+  checkCounters.set(uriKey, currentCheck);
+
   const uri = document.uri;
 
   if (!['ruby', 'rake'].includes(document.languageId)) {
@@ -132,6 +138,10 @@ export async function checkDocument(document: vscode.TextDocument): Promise<RunR
     return diag;
   });
 
+  if (checkCounters.get(uriKey) !== currentCheck) {
+    return result;
+  }
+
   collection.set(uri, diagnostics);
   return result;
 }
@@ -142,8 +152,19 @@ export function createDiagnosticProvider(
   const onSave = vscode.workspace.onDidSaveTextDocument(async (doc) => {
     const config = vscode.workspace.getConfiguration('docscribe');
     if (!config.get<boolean>('runOnSave', true)) return;
-    const result = await checkDocument(doc);
-    if (result && onCheckResult) onCheckResult(result);
+
+    const uriKey = doc.uri.toString();
+    const existing = debounceTimers.get(uriKey);
+    if (existing) clearTimeout(existing);
+
+    debounceTimers.set(
+      uriKey,
+      setTimeout(async () => {
+        debounceTimers.delete(uriKey);
+        const result = await checkDocument(doc);
+        if (result && onCheckResult) onCheckResult(result);
+      }, 300),
+    );
   });
 
   const onOpen = vscode.workspace.onDidOpenTextDocument(async (doc) => {
@@ -155,5 +176,13 @@ export function createDiagnosticProvider(
     if (result && onCheckResult) onCheckResult(result);
   });
 
-  return vscode.Disposable.from(collection, onSave, onOpen);
+  const base = vscode.Disposable.from(collection, onSave, onOpen);
+  return {
+    dispose: () => {
+      for (const timer of debounceTimers.values()) clearTimeout(timer);
+      debounceTimers.clear();
+      checkCounters.clear();
+      base.dispose();
+    },
+  };
 }

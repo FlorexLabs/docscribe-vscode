@@ -24,6 +24,19 @@ export interface RunOptions {
 }
 
 /**
+ * Checks whether the docscribe gem is installed in the current project.
+ *
+ * @param cwd - Working directory (project root) to run the check in.
+ * @returns true if `bundle exec docscribe --version` succeeds.
+ */
+export async function checkGemInstalled(cwd: string): Promise<boolean> {
+  const config = vscode.workspace.getConfiguration('docscribe');
+  const bundlePath = config.get<string>('bundlePath', 'bundle');
+  const result = await execCommand(bundlePath, ['exec', 'docscribe', '--version'], cwd);
+  return result.success;
+}
+
+/**
  * Result of a docscribe command execution.
  *
  * Exit codes (docscribe ≥ 1.5.0):
@@ -291,6 +304,11 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
     };
   }
 
+  const caps = await detectCapabilities(projectRoot);
+  if (caps) {
+    console.log(`DocScribe: detected docscribe v${caps.version}`);
+  }
+
   const config = vscode.workspace.getConfiguration('docscribe');
   const strategy = options.strategy || 'check';
   const json = options.json ?? true;
@@ -307,9 +325,10 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
 
   const useBundleExec = config.get<boolean>('useBundleExec', true);
   const commandPath = config.get<string>('commandPath', 'docscribe');
+  const bundlePath = config.get<string>('bundlePath', 'bundle');
 
   if (useBundleExec) {
-    return execCommand('bundle', ['exec', commandPath, ...args], projectRoot);
+    return execCommand(bundlePath, ['exec', commandPath, ...args], projectRoot);
   }
   return execCommand(commandPath, args, projectRoot);
 }

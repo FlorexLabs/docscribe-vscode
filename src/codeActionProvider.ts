@@ -152,6 +152,7 @@ export async function applyFix(
   const config = vscode.workspace.getConfiguration('docscribe');
   const useBundleExec = config.get<boolean>('useBundleExec', true);
   const commandPath = config.get<string>('commandPath', 'docscribe');
+  const bundlePath = config.get<string>('bundlePath', 'bundle');
   const rbsEnabled = config.get<boolean>('useRbs', false);
   const useRbs = rbsEnabled && gemfileHasRbs(path.join(root, 'Gemfile'));
 
@@ -159,7 +160,7 @@ export async function applyFix(
   const omitBoilerplate = config.get<boolean>('omitBoilerplate', false);
   if (omitBoilerplate) fixFlags.push('-B');
 
-  const cmd = useBundleExec ? 'bundle' : commandPath;
+  const cmd = useBundleExec ? bundlePath : commandPath;
   const cmdArgs = useBundleExec
     ? ['exec', commandPath, ...fixFlags, '--stdin', ...(useRbs ? ['--rbs-collection'] : [])]
     : [...fixFlags, '--stdin', ...(useRbs ? ['--rbs-collection'] : [])];

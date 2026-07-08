@@ -86,6 +86,51 @@ export function gemfileHasRbs(gemfilePath: string): boolean {
   }
 }
 
+export interface Capabilities {
+  version: string;
+  hasServerMode: boolean;
+  hasRbsCollection: boolean;
+  hasExitCodeSemantics: boolean;
+}
+
+let cachedCapabilities: Capabilities | null = null;
+
+export function getCachedCapabilities(): Capabilities | null {
+  return cachedCapabilities;
+}
+
+export async function detectCapabilities(projectRoot: string): Promise<Capabilities | null> {
+  const config = vscode.workspace.getConfiguration('docscribe');
+  const commandPath = config.get<string>('commandPath', 'docscribe');
+  const useBundleExec = config.get<boolean>('useBundleExec', true);
+
+  const cmd = useBundleExec ? 'bundle' : commandPath;
+  const args = useBundleExec ? ['exec', commandPath, '--version'] : ['--version'];
+
+  try {
+    const result = await execCommand(cmd, args, projectRoot);
+    if (!result.success) return null;
+    const version = result.stdout.trim();
+    cachedCapabilities = parseCapabilities(version);
+    return cachedCapabilities;
+  } catch {
+    return null;
+  }
+}
+
+function parseCapabilities(version: string): Capabilities | null {
+  const match = version.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  const major = parseInt(match[1], 10);
+  const minor = parseInt(match[2], 10);
+  return {
+    version,
+    hasServerMode: major > 1 || (major === 1 && minor >= 6),
+    hasRbsCollection: major > 1 || (major === 1 && minor >= 4),
+    hasExitCodeSemantics: major > 1 || (major === 1 && minor >= 5),
+  };
+}
+
 /**
  * Builds the argument list for the docscribe CLI based on strategy and flags.
  *

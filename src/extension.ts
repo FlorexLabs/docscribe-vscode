@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import {
   runDocscribe,
   findProjectRoot,
   detectCapabilities,
   getCachedCapabilities,
+  checkGemInstalled,
   type RunResult,
 } from './docscribeRunner';
 import { execFile } from './execAsync';
@@ -13,6 +15,8 @@ import { DocscribeFoldingRangeProvider, getCommentBlockStartLines } from './fold
 
 let outputChannel: vscode.OutputChannel;
 let statusBarItem: vscode.StatusBarItem;
+let gemChecked = false;
+let gemInstalled = true;
 
 export function updateStatusBar(result: RunResult | null): void {
   if (!result) {
@@ -73,8 +77,39 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(outputChannel, statusBarItem);
 
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (workspaceRoot) {
+    checkGemInstalled(workspaceRoot).then((installed) => {
+      gemChecked = true;
+      gemInstalled = installed;
+      if (!installed) {
+        const gemfilePath = path.join(workspaceRoot, 'Gemfile');
+        vscode.window
+          .showWarningMessage(
+            "DocScribe: gem 'docscribe' not found. Add it to your Gemfile and run bundle install.",
+            'Open Gemfile',
+          )
+          .then((selection) => {
+            if (selection === 'Open Gemfile') {
+              vscode.commands.executeCommand('vscode.open', vscode.Uri.file(gemfilePath));
+            }
+          });
+      }
+    });
+  }
+
+  function ensureGemInstalled(): boolean {
+    if (gemChecked && !gemInstalled) {
+      vscode.window.showErrorMessage(
+        "DocScribe: gem 'docscribe' not found. Add it to your Gemfile and run bundle install.",
+      );
+      return false;
+    }
+    return true;
+  }
+
   const checkFileCmd = vscode.commands.registerCommand('docscribe.checkFile', async () => {
-    if (!requireRubyFile()) return;
+    if (!requireRubyFile() || !ensureGemInstalled()) return;
     const editor = vscode.window.activeTextEditor;
     const result = await withProgress('DocScribe: checking file...', () =>
       runDocscribe({ strategy: 'check' }),
@@ -88,6 +123,7 @@ export function activate(context: vscode.ExtensionContext) {
   const checkWorkspaceCmd = vscode.commands.registerCommand(
     'docscribe.checkWorkspace',
     async () => {
+      if (!ensureGemInstalled()) return;
       const result = await withProgress('DocScribe: checking workspace...', () =>
         runDocscribe({ strategy: 'check', workspace: true }),
       );
@@ -96,7 +132,7 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   const safeFixCmd = vscode.commands.registerCommand('docscribe.safeFix', async () => {
-    if (!requireRubyFile()) return;
+    if (!requireRubyFile() || !ensureGemInstalled()) return;
     const result = await withProgress('DocScribe: applying safe fixes...', () =>
       runDocscribe({ strategy: 'safe' }),
     );
@@ -104,7 +140,7 @@ export function activate(context: vscode.ExtensionContext) {
   });
 
   const aggressiveFixCmd = vscode.commands.registerCommand('docscribe.aggressiveFix', async () => {
-    if (!requireRubyFile()) return;
+    if (!requireRubyFile() || !ensureGemInstalled()) return;
     const result = await withProgress('DocScribe: applying aggressive fixes...', () =>
       runDocscribe({ strategy: 'aggressive' }),
     );
@@ -122,6 +158,7 @@ export function activate(context: vscode.ExtensionContext) {
   const fixCmd = vscode.commands.registerCommand(
     'docscribe.applyFix',
     async (uri: vscode.Uri, diagnostic?: vscode.Diagnostic, mode?: 'safe' | 'aggressive') => {
+      if (!ensureGemInstalled()) return;
       await applyFix(uri, diagnostic, mode);
     },
   );
@@ -180,6 +217,7 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   const updateTypesCmd = vscode.commands.registerCommand('docscribe.updateTypes', async () => {
+    if (!ensureGemInstalled()) return;
     const result = await withProgress('DocScribe: updating types from RBS...', () =>
       runDocscribe({ strategy: 'updateTypes' }),
     );

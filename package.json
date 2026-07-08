@@ -164,6 +164,16 @@
           "type": "boolean",
           "default": false,
           "description": "Omit boilerplate description text from generated YARD docs (passes -B to docscribe)"
+        },
+        "docscribe.rubyPath": {
+          "type": "string",
+          "default": "ruby",
+          "description": "Path to Ruby executable (default: ruby)"
+        },
+        "docscribe.bundlePath": {
+          "type": "string",
+          "default": "bundle",
+          "description": "Path to Bundler executable (default: bundle)"
         }
       }
     }

@@ -12,6 +12,7 @@ import { execFile } from './execAsync';
 import { createDiagnosticProvider, checkDocument } from './diagnosticProvider';
 import { DocscribeCodeActionProvider, applyFix } from './codeActionProvider';
 import { DocscribeFoldingRangeProvider, getCommentBlockStartLines } from './foldingProvider';
+import { ensureServerRunning, stopServer } from './docscribeClient';
 
 let outputChannel: vscode.OutputChannel;
 let statusBarItem: vscode.StatusBarItem;
@@ -69,6 +70,15 @@ function showResult(result: RunResult): void {
 
 export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('DocScribe');
+
+  // Fire-and-forget server startup
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (workspaceFolders && workspaceFolders.length > 0) {
+    const root = findProjectRoot(workspaceFolders[0].uri.fsPath);
+    if (root) {
+      ensureServerRunning(root);
+    }
+  }
 
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.command = 'docscribe.checkFile';
@@ -299,4 +309,8 @@ export function activate(context: vscode.ExtensionContext) {
     updateTypesCmd,
     doctorCmd,
   );
+}
+
+export function deactivate(): void {
+  stopServer();
 }

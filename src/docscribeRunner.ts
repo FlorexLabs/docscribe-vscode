@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as proc from './execAsync';
 import * as path from 'path';
 import * as fs from 'fs';
+import { ensureServerRunning, checkFileViaServer } from './docscribeClient';
 
 /**
  * Options for the docscribe runner.
@@ -322,6 +323,28 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
     omitBoilerplate,
     options.workspace ? undefined : filePath,
   );
+
+  const useServer = config.get<boolean>('useServer', true);
+  if (useServer && strategy === 'check' && !options.workspace) {
+    try {
+      const serverRunning = await ensureServerRunning(projectRoot);
+      if (serverRunning) {
+        const result = await checkFileViaServer(filePath, useRbs);
+        const parsed = JSON.parse(result);
+        const offenseCount = parsed?.summary?.offense_count || 0;
+        return {
+          success: true,
+          hasIssues: offenseCount > 0,
+          exitCode: offenseCount > 0 ? 1 : 0,
+          stdout: result,
+          stderr: '',
+          output: result,
+        };
+      }
+    } catch {
+      // Fallback to CLI
+    }
+  }
 
   const useBundleExec = config.get<boolean>('useBundleExec', true);
   const commandPath = config.get<string>('commandPath', 'docscribe');

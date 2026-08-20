@@ -4,6 +4,15 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { ensureServerRunning, checkFileViaServer } from './docscribeClient';
 
+let docscribeLog: vscode.OutputChannel | undefined;
+
+function logInfo(message: string): void {
+  if (!docscribeLog) {
+    docscribeLog = vscode.window.createOutputChannel('DocScribe');
+  }
+  docscribeLog.appendLine(message);
+}
+
 /**
  * Options for the docscribe runner.
  */
@@ -307,7 +316,7 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
 
   const caps = await detectCapabilities(projectRoot);
   if (caps) {
-    console.log(`DocScribe: detected docscribe v${caps.version}`);
+    logInfo(`DocScribe: detected docscribe v${caps.version}`);
   }
 
   const config = vscode.workspace.getConfiguration('docscribe');
@@ -329,7 +338,7 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
     try {
       const serverRunning = await ensureServerRunning(projectRoot);
       if (serverRunning) {
-        const result = await checkFileViaServer(filePath, useRbs);
+        const result = await checkFileViaServer(filePath);
         const parsed = JSON.parse(result);
         const offenseCount = parsed?.summary?.offense_count || 0;
         return {

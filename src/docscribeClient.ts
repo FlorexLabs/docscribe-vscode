@@ -406,6 +406,85 @@ export function changesToCheckJson(filePath: string, changes: unknown): string {
 }
 
 /**
+ * Convert a `check_batch` results array into the CLI `--format json` shape.
+ *
+ * Mirrors `DocscribeDaemon.buildBatchCheckJson` in the RubyMine plugin:
+ * each result with `status: "ok"|"fail"` becomes a file entry with offenses
+ * derived from `changes`; results with `status: "error"` count toward
+ * `error_count` and are not added to `files`.
+ *
+ * @param results - The `results` array from `check_batch` response.
+ * @returns A JSON string in CLI `--format json` format.
+ */
+export function batchResultsToJson(results: unknown): string {
+  const list = Array.isArray(results) ? results : [];
+  const files: Record<string, unknown>[] = [];
+  let offenseCount = 0;
+  let errorCount = 0;
+  let targetCount = 0;
+
+  for (const entry of list) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const rec = entry as Record<string, unknown>;
+    const filePath = rec['file'];
+    if (typeof filePath !== 'string' || !filePath) continue;
+    targetCount++;
+    const status = typeof rec['status'] === 'string' ? rec['status'] : 'error';
+    if (status === 'error') {
+      errorCount++;
+      continue;
+    }
+    const changes = rec['changes'];
+    const offenses = (Array.isArray(changes) ? changes : []).map((change) => {
+      const line =
+        typeof change === 'object' &&
+        change !== null &&
+        typeof (change as Record<string, unknown>)['line'] === 'number'
+          ? ((change as Record<string, unknown>)['line'] as number)
+          : 1;
+      return {
+        severity: 'convention',
+        cop_name: 'DocScribe/MissingDocumentation',
+        message: 'Missing YARD documentation',
+        corrected: false,
+        correctable: true,
+        location: {
+          start_line: line,
+          start_column: 1,
+          last_line: line,
+          last_column: 1,
+        },
+      };
+    });
+    offenseCount += offenses.length;
+    files.push({ path: filePath, offenses });
+  }
+
+  return JSON.stringify({
+    metadata: { docscribe_version: '1.5.1' },
+    files,
+    summary: {
+      offense_count: offenseCount,
+      target_file_count: targetCount,
+      inspected_file_count: files.length,
+      error_count: errorCount,
+    },
+  });
+}
+
+/**
+ * Run a multi-file check through the daemon (`check_batch`).
+ *
+ * @param files - Absolute paths of files to check.
+ * @returns The CLI `--format json`-shaped output as a string.
+ */
+export async function checkBatchViaServer(files: string[]): Promise<string> {
+  const result = (await sendRequest('check_batch', { files })) as Record<string, unknown>;
+  const results = result?.['results'];
+  return batchResultsToJson(results);
+}
+
+/**
  * Run a single-file check through the daemon.
  *
  * @param filePath - Absolute path of the file to check (dry-run).

@@ -3,7 +3,13 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as sinon from 'sinon';
-import { findProjectRoot, execCommand } from '../../docscribeRunner';
+import {
+  findProjectRoot,
+  execCommand,
+  parseCapabilities,
+  clearCachedCapabilitiesForTesting,
+  clearServerModeWarningForTesting,
+} from '../../docscribeRunner';
 
 const fixturesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'test', 'suite', 'fixtures');
 
@@ -119,6 +125,82 @@ suite('docscribeRunner', () => {
       assert.strictEqual(result.stdout, 'stdout');
       assert.strictEqual(result.stderr, 'stderr');
       assert.strictEqual(result.output, 'stdout\nstderr');
+    });
+  });
+
+  suite('parseCapabilities', () => {
+    teardown(() => {
+      clearCachedCapabilitiesForTesting();
+      clearServerModeWarningForTesting();
+    });
+
+    test('returns null for empty string', () => {
+      assert.strictEqual(parseCapabilities(''), null);
+    });
+
+    test('returns null for non-version string', () => {
+      assert.strictEqual(parseCapabilities('not-a-version'), null);
+    });
+
+    test('parses 1.4.9 — no server, no batch', () => {
+      const caps = parseCapabilities('1.4.9');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.version, '1.4.9');
+      assert.strictEqual(caps.hasServerMode, false);
+      assert.strictEqual(caps.hasBatchMode, false);
+      assert.strictEqual(caps.hasRbsCollection, true);
+      assert.strictEqual(caps.hasExitCodeSemantics, false);
+    });
+
+    test('parses 1.5.0 — no server', () => {
+      const caps = parseCapabilities('1.5.0');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.hasServerMode, false);
+      assert.strictEqual(caps.hasBatchMode, false);
+      assert.strictEqual(caps.hasExitCodeSemantics, true);
+    });
+
+    test('parses 1.5.1 — server yes, batch no', () => {
+      const caps = parseCapabilities('1.5.1');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.version, '1.5.1');
+      assert.strictEqual(caps.hasServerMode, true);
+      assert.strictEqual(caps.hasBatchMode, false);
+    });
+
+    test('parses 1.5.2 — server and batch', () => {
+      const caps = parseCapabilities('1.5.2');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.hasServerMode, true);
+      assert.strictEqual(caps.hasBatchMode, true);
+    });
+
+    test('parses 1.6.1 — server and batch', () => {
+      const caps = parseCapabilities('1.6.1');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.hasServerMode, true);
+      assert.strictEqual(caps.hasBatchMode, true);
+    });
+
+    test('parses 2.0.0 — server and batch', () => {
+      const caps = parseCapabilities('2.0.0');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.hasServerMode, true);
+      assert.strictEqual(caps.hasBatchMode, true);
+    });
+
+    test('handles version with surrounding text', () => {
+      const caps = parseCapabilities('docscribe 1.6.1');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.version, '1.6.1');
+      assert.strictEqual(caps.hasServerMode, true);
+    });
+
+    test('handles version with newline', () => {
+      const caps = parseCapabilities('1.5.1\n');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.version, '1.5.1');
+      assert.strictEqual(caps.hasServerMode, true);
     });
   });
 });

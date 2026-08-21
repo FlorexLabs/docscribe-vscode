@@ -71,12 +71,19 @@ function showResult(result: RunResult): void {
 export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('DocScribe');
 
-  // Fire-and-forget server startup
+  // Fire-and-forget server startup (only if gem supports server mode)
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (workspaceFolders && workspaceFolders.length > 0) {
     const root = findProjectRoot(workspaceFolders[0].uri.fsPath);
     if (root) {
-      ensureServerRunning(root);
+      const cached = getCachedCapabilities();
+      if (cached) {
+        if (cached.hasServerMode) ensureServerRunning(root);
+      } else {
+        detectCapabilities(root).then((caps) => {
+          if (caps?.hasServerMode) ensureServerRunning(root);
+        });
+      }
     }
   }
 
@@ -262,7 +269,10 @@ export function activate(context: vscode.ExtensionContext) {
         if (caps) {
           channel.appendLine(`DocScribe version: ${caps.version}`);
           channel.appendLine(
-            `  Server mode: ${caps.hasServerMode ? 'Available' : 'Not available'}`,
+            `  Server mode: ${caps.hasServerMode ? 'Available' : 'Not available (requires >=1.5.1)'}`,
+          );
+          channel.appendLine(
+            `  Batch mode (check_batch): ${caps.hasBatchMode ? 'Available' : 'Not available (requires >=1.5.2)'}`,
           );
           channel.appendLine(
             `  RBS collection: ${caps.hasRbsCollection ? 'Available' : 'Not available'}`,
@@ -270,6 +280,16 @@ export function activate(context: vscode.ExtensionContext) {
           channel.appendLine(
             `  Exit code semantics: ${caps.hasExitCodeSemantics ? 'Available' : 'Not available'}`,
           );
+          const useServer = vscode.workspace
+            .getConfiguration('docscribe')
+            .get<boolean>('useServer', true);
+          const backend = useServer && caps.hasServerMode ? 'server' : 'CLI';
+          const reason = !caps.hasServerMode
+            ? ' (fallback — gem <1.5.1)'
+            : !useServer
+              ? ' (disabled in settings)'
+              : '';
+          channel.appendLine(`  Backend: ${backend}${reason}`);
         } else {
           channel.appendLine('DocScribe version: Not detected');
           channel.appendLine('');

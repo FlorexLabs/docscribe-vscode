@@ -112,6 +112,7 @@ export function gemfileHasRbs(gemfilePath: string): boolean {
 export interface Capabilities {
   version: string;
   hasServerMode: boolean;
+  hasBatchMode: boolean;
   hasRbsCollection: boolean;
   hasExitCodeSemantics: boolean;
 }
@@ -120,6 +121,16 @@ let cachedCapabilities: Capabilities | null = null;
 
 export function getCachedCapabilities(): Capabilities | null {
   return cachedCapabilities;
+}
+
+export function clearCachedCapabilitiesForTesting(): void {
+  cachedCapabilities = null;
+}
+
+let serverModeWarningShown = false;
+
+export function clearServerModeWarningForTesting(): void {
+  serverModeWarningShown = false;
 }
 
 export async function detectCapabilities(projectRoot: string): Promise<Capabilities | null> {
@@ -141,16 +152,23 @@ export async function detectCapabilities(projectRoot: string): Promise<Capabilit
   }
 }
 
-function parseCapabilities(version: string): Capabilities | null {
+export function parseCapabilities(version: string): Capabilities | null {
   const match = version.match(/(\d+)\.(\d+)\.(\d+)/);
   if (!match) return null;
   const major = parseInt(match[1], 10);
   const minor = parseInt(match[2], 10);
+  const patch = parseInt(match[3], 10);
+  const atLeast = (tMajor: number, tMinor: number, tPatch: number): boolean =>
+    major > tMajor ||
+    (major === tMajor && minor > tMinor) ||
+    (major === tMajor && minor === tMinor && patch >= tPatch);
+  // Server mode introduced in 1.5.1, batch mode (check_batch) in 1.5.2
   return {
-    version,
-    hasServerMode: major > 1 || (major === 1 && minor >= 6),
-    hasRbsCollection: major > 1 || (major === 1 && minor >= 4),
-    hasExitCodeSemantics: major > 1 || (major === 1 && minor >= 5),
+    version: `${major}.${minor}.${patch}`,
+    hasServerMode: atLeast(1, 5, 1),
+    hasBatchMode: atLeast(1, 5, 2),
+    hasRbsCollection: atLeast(1, 4, 0),
+    hasExitCodeSemantics: atLeast(1, 5, 0),
   };
 }
 
@@ -317,6 +335,29 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
   const caps = await detectCapabilities(projectRoot);
   if (caps) {
     logInfo(`DocScribe: detected docscribe v${caps.version}`);
+    if (!caps.hasServerMode && !serverModeWarningShown) {
+      serverModeWarningShown = true;
+      vscode.window.showWarningMessage(
+        `DocScribe gem ${caps.version} does not support server mode (requires >=1.5.1). Using CLI. Please upgrade: bundle update docscribe`,
+      );
+    } else if (caps.hasServerMode && !caps.hasBatchMode && !serverModeWarningShown) {
+      // 1.5.1 has server but check_batch buggy on Ruby 4.0 — warn once
+      try {
+        const rubyVersion = await new Promise<string>((resolve) => {
+          proc.execFile('ruby', ['--version'], {}, (err: Error | null, stdout: string) => {
+            resolve(err ? '' : stdout);
+          });
+        });
+        if (rubyVersion.includes('ruby 4.')) {
+          serverModeWarningShown = true;
+          vscode.window.showWarningMessage(
+            `DocScribe ${caps.version} has known check_batch issue on Ruby 4.0. Upgrade to >=1.6.1`,
+          );
+        }
+      } catch {
+        // ignore
+      }
+    }
   }
 
   const config = vscode.workspace.getConfiguration('docscribe');
@@ -334,7 +375,8 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
   );
 
   const useServer = config.get<boolean>('useServer', true);
-  if (useServer && strategy === 'check' && !options.workspace) {
+  const canUseServer = useServer && (caps ? caps.hasServerMode : true);
+  if (canUseServer && strategy === 'check' && !options.workspace) {
     try {
       const serverRunning = await ensureServerRunning(projectRoot);
       if (serverRunning) {

@@ -1,11 +1,33 @@
 import * as vscode from 'vscode';
-import { runDocscribe, type RunResult } from './docscribeRunner';
+import * as path from 'path';
+import * as fs from 'fs';
+import {
+  runDocscribe,
+  findProjectRoot,
+  detectCapabilities,
+  getCachedCapabilities,
+  checkGemInstalled,
+  collectWorkspaceFiles,
+  chunkArray,
+  type RunResult,
+} from './docscribeRunner';
+import { execFile } from './execAsync';
 import { createDiagnosticProvider, checkDocument } from './diagnosticProvider';
 import { DocscribeCodeActionProvider, applyFix } from './codeActionProvider';
 import { DocscribeFoldingRangeProvider, getCommentBlockStartLines } from './foldingProvider';
+import {
+  ensureServerRunning,
+  stopServer,
+  checkBatchViaServer,
+  getSocketPath,
+  readPid,
+  isProcessAlive,
+} from './docscribeClient';
 
 let outputChannel: vscode.OutputChannel;
 let statusBarItem: vscode.StatusBarItem;
+let gemChecked = false;
+let gemInstalled = true;
 
 export function updateStatusBar(result: RunResult | null): void {
   if (!result) {
@@ -59,6 +81,22 @@ function showResult(result: RunResult): void {
 export function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('DocScribe');
 
+  // Fire-and-forget server startup (only if gem supports server mode)
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (workspaceFolders && workspaceFolders.length > 0) {
+    const root = findProjectRoot(workspaceFolders[0].uri.fsPath);
+    if (root) {
+      const cached = getCachedCapabilities();
+      if (cached) {
+        if (cached.hasServerMode) ensureServerRunning(root);
+      } else {
+        detectCapabilities(root).then((caps) => {
+          if (caps?.hasServerMode) ensureServerRunning(root);
+        });
+      }
+    }
+  }
+
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.command = 'docscribe.checkFile';
   updateStatusBar(null);
@@ -66,8 +104,39 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(outputChannel, statusBarItem);
 
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (workspaceRoot) {
+    checkGemInstalled(workspaceRoot).then((installed) => {
+      gemChecked = true;
+      gemInstalled = installed;
+      if (!installed) {
+        const gemfilePath = path.join(workspaceRoot, 'Gemfile');
+        vscode.window
+          .showWarningMessage(
+            "DocScribe: gem 'docscribe' not found. Add it to your Gemfile and run bundle install.",
+            'Open Gemfile',
+          )
+          .then((selection) => {
+            if (selection === 'Open Gemfile') {
+              vscode.commands.executeCommand('vscode.open', vscode.Uri.file(gemfilePath));
+            }
+          });
+      }
+    });
+  }
+
+  function ensureGemInstalled(): boolean {
+    if (gemChecked && !gemInstalled) {
+      vscode.window.showErrorMessage(
+        "DocScribe: gem 'docscribe' not found. Add it to your Gemfile and run bundle install.",
+      );
+      return false;
+    }
+    return true;
+  }
+
   const checkFileCmd = vscode.commands.registerCommand('docscribe.checkFile', async () => {
-    if (!requireRubyFile()) return;
+    if (!requireRubyFile() || !ensureGemInstalled()) return;
     const editor = vscode.window.activeTextEditor;
     const result = await withProgress('DocScribe: checking file...', () =>
       runDocscribe({ strategy: 'check' }),
@@ -81,15 +150,117 @@ export function activate(context: vscode.ExtensionContext) {
   const checkWorkspaceCmd = vscode.commands.registerCommand(
     'docscribe.checkWorkspace',
     async () => {
-      const result = await withProgress('DocScribe: checking workspace...', () =>
-        runDocscribe({ strategy: 'check', workspace: true }),
+      if (!ensureGemInstalled()) return;
+      const result = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: 'DocScribe: checking workspace...',
+          cancellable: true,
+        },
+        async (progress, token) => {
+          // Try server batch mode (check_batch) when available
+          try {
+            const folders = vscode.workspace.workspaceFolders;
+            if (folders && folders.length > 0) {
+              const projectRoot = findProjectRoot(folders[0].uri.fsPath);
+              if (projectRoot) {
+                const caps = getCachedCapabilities() || (await detectCapabilities(projectRoot));
+                const useServer = vscode.workspace
+                  .getConfiguration('docscribe')
+                  .get<boolean>('useServer', true);
+                if (caps?.hasBatchMode && useServer) {
+                  const serverRunning = await ensureServerRunning(projectRoot);
+                  if (serverRunning && !token.isCancellationRequested) {
+                    const allFiles = collectWorkspaceFiles(projectRoot);
+                    if (allFiles.length === 0) {
+                      const empty = JSON.stringify({
+                        metadata: { docscribe_version: caps.version },
+                        files: [],
+                        summary: {
+                          offense_count: 0,
+                          target_file_count: 0,
+                          inspected_file_count: 0,
+                          error_count: 0,
+                        },
+                      });
+                      return {
+                        success: true,
+                        hasIssues: false,
+                        exitCode: 0,
+                        stdout: empty,
+                        stderr: '',
+                        output: empty,
+                      } as RunResult;
+                    }
+                    const chunks = chunkArray(allFiles, 32);
+                    let totalOffense = 0;
+                    let totalTarget = 0;
+                    let totalInspected = 0;
+                    let totalError = 0;
+                    const allFileEntries: unknown[] = [];
+                    for (let i = 0; i < chunks.length; i++) {
+                      if (token.isCancellationRequested) break;
+                      const chunk = chunks[i];
+                      progress.report({
+                        message: `${Math.min((i + 1) * 32, allFiles.length)}/${allFiles.length} files`,
+                        increment: (1 / chunks.length) * 100,
+                      });
+                      try {
+                        const json = await checkBatchViaServer(chunk);
+                        const parsed = JSON.parse(json) as {
+                          files: unknown[];
+                          summary: {
+                            offense_count: number;
+                            target_file_count: number;
+                            inspected_file_count: number;
+                            error_count: number;
+                          };
+                        };
+                        allFileEntries.push(...parsed.files);
+                        totalOffense += parsed.summary.offense_count || 0;
+                        totalTarget += parsed.summary.target_file_count || chunk.length;
+                        totalInspected += parsed.summary.inspected_file_count || 0;
+                        totalError += parsed.summary.error_count || 0;
+                      } catch {
+                        // Batch chunk failed — fallback to CLI for whole workspace
+                        return runDocscribe({ strategy: 'check', workspace: true });
+                      }
+                    }
+                    const aggregated = {
+                      metadata: { docscribe_version: caps.version },
+                      files: allFileEntries,
+                      summary: {
+                        offense_count: totalOffense,
+                        target_file_count: totalTarget,
+                        inspected_file_count: totalInspected,
+                        error_count: totalError,
+                      },
+                    };
+                    const stdout = JSON.stringify(aggregated);
+                    return {
+                      success: true,
+                      hasIssues: totalOffense > 0,
+                      exitCode: totalOffense > 0 || totalError > 0 ? 1 : 0,
+                      stdout,
+                      stderr: '',
+                      output: stdout,
+                    } as RunResult;
+                  }
+                }
+              }
+            }
+          } catch {
+            // Fall through to CLI on any batch error
+          }
+          return runDocscribe({ strategy: 'check', workspace: true });
+        },
       );
       showResult(result);
     },
   );
 
   const safeFixCmd = vscode.commands.registerCommand('docscribe.safeFix', async () => {
-    if (!requireRubyFile()) return;
+    if (!requireRubyFile() || !ensureGemInstalled()) return;
     const result = await withProgress('DocScribe: applying safe fixes...', () =>
       runDocscribe({ strategy: 'safe' }),
     );
@@ -97,7 +268,7 @@ export function activate(context: vscode.ExtensionContext) {
   });
 
   const aggressiveFixCmd = vscode.commands.registerCommand('docscribe.aggressiveFix', async () => {
-    if (!requireRubyFile()) return;
+    if (!requireRubyFile() || !ensureGemInstalled()) return;
     const result = await withProgress('DocScribe: applying aggressive fixes...', () =>
       runDocscribe({ strategy: 'aggressive' }),
     );
@@ -115,6 +286,7 @@ export function activate(context: vscode.ExtensionContext) {
   const fixCmd = vscode.commands.registerCommand(
     'docscribe.applyFix',
     async (uri: vscode.Uri, diagnostic?: vscode.Diagnostic, mode?: 'safe' | 'aggressive') => {
+      if (!ensureGemInstalled()) return;
       await applyFix(uri, diagnostic, mode);
     },
   );
@@ -173,10 +345,106 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   const updateTypesCmd = vscode.commands.registerCommand('docscribe.updateTypes', async () => {
+    if (!ensureGemInstalled()) return;
     const result = await withProgress('DocScribe: updating types from RBS...', () =>
       runDocscribe({ strategy: 'updateTypes' }),
     );
     showResult(result);
+  });
+
+  const doctorCmd = vscode.commands.registerCommand('docscribe.doctor', async () => {
+    const channel = vscode.window.createOutputChannel('DocScribe Doctor');
+    channel.clear();
+    channel.appendLine('=== DocScribe Doctor ===');
+    channel.appendLine('');
+
+    try {
+      const rubyResult = await new Promise<string>((resolve) => {
+        execFile('ruby', ['--version'], (err: Error | null, stdout: string) => {
+          resolve(err ? 'Not found' : stdout.trim());
+        });
+      });
+      channel.appendLine(`Ruby: ${rubyResult}`);
+    } catch {
+      channel.appendLine('Ruby: Not found');
+    }
+
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (workspaceFolders) {
+      const rootPath = workspaceFolders[0].uri.fsPath;
+      const projectRoot = findProjectRoot(rootPath);
+      channel.appendLine(`Project root: ${projectRoot || 'Not found (no Gemfile)'}`);
+
+      if (projectRoot) {
+        const caps = getCachedCapabilities() || (await detectCapabilities(projectRoot));
+        if (caps) {
+          channel.appendLine(`DocScribe version: ${caps.version}`);
+          channel.appendLine(
+            `  Server mode: ${caps.hasServerMode ? 'Available' : 'Not available (requires >=1.5.1)'}`,
+          );
+          channel.appendLine(
+            `  Batch mode (check_batch): ${caps.hasBatchMode ? 'Available' : 'Not available (requires >=1.5.2)'}`,
+          );
+          channel.appendLine(
+            `  RBS collection: ${caps.hasRbsCollection ? 'Available' : 'Not available'}`,
+          );
+          channel.appendLine(
+            `  Exit code semantics: ${caps.hasExitCodeSemantics ? 'Available' : 'Not available'}`,
+          );
+          const useServer = vscode.workspace
+            .getConfiguration('docscribe')
+            .get<boolean>('useServer', true);
+          const backend = useServer && caps.hasServerMode ? 'server' : 'CLI';
+          const reason = !caps.hasServerMode
+            ? ' (fallback — gem <1.5.1)'
+            : !useServer
+              ? ' (disabled in settings)'
+              : '';
+          channel.appendLine(`  Backend: ${backend}${reason}`);
+          // Server socket / PID / locale diagnostics (feat/doctor-server-details)
+          const sock = getSocketPath();
+          if (sock) {
+            const exists = fs.existsSync(sock);
+            channel.appendLine(`  Socket: ${sock} (exists: ${exists ? 'yes' : 'no'})`);
+            const pid = readPid(sock);
+            if (pid !== null) {
+              const alive = isProcessAlive(pid);
+              channel.appendLine(`  Daemon PID: ${pid} (alive: ${alive ? 'yes' : 'no'})`);
+            } else {
+              channel.appendLine('  Daemon PID: not found (.pid missing)');
+            }
+          } else {
+            channel.appendLine('  Socket: not determined (daemon not started yet)');
+            channel.appendLine('  Daemon PID: unknown');
+          }
+          const lang = process.env.LANG || '(unset)';
+          const lcAll = process.env.LC_ALL || '(unset)';
+          const localeNote =
+            !process.env.LANG || !process.env.LANG.trim() ? ' → plugin will use en_US.UTF-8' : '';
+          channel.appendLine(`  Locale: LANG=${lang} LC_ALL=${lcAll}${localeNote}`);
+        } else {
+          channel.appendLine('DocScribe version: Not detected');
+          channel.appendLine('');
+          channel.appendLine('Troubleshooting:');
+          channel.appendLine('  1. Ensure docscribe gem is installed: gem list docscribe');
+          channel.appendLine('  2. Add to Gemfile: gem "docscribe"');
+          channel.appendLine('  3. Run: bundle install');
+        }
+      }
+    }
+
+    const config = vscode.workspace.getConfiguration('docscribe');
+    channel.appendLine('');
+    channel.appendLine('Settings:');
+    channel.appendLine(`  runOnSave: ${config.get('runOnSave')}`);
+    channel.appendLine(`  useBundleExec: ${config.get('useBundleExec')}`);
+    channel.appendLine(`  useRbs: ${config.get('useRbs')}`);
+    channel.appendLine(`  commandPath: ${config.get('commandPath')}`);
+    channel.appendLine(`  ignorePatterns: ${JSON.stringify(config.get('ignorePatterns'))}`);
+    channel.appendLine(`  foldComments: ${config.get('foldComments')}`);
+    channel.appendLine(`  omitBoilerplate: ${config.get('omitBoilerplate')}`);
+
+    channel.show();
   });
 
   context.subscriptions.push(
@@ -191,5 +459,10 @@ export function activate(context: vscode.ExtensionContext) {
     editorListener,
     toggleFoldCmd,
     updateTypesCmd,
+    doctorCmd,
   );
+}
+
+export function deactivate(): void {
+  stopServer();
 }

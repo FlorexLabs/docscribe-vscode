@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { execFile } from 'child_process';
 import { findProjectRoot, gemfileHasRbs } from './docscribeRunner';
+import { ensureServerRunning, applyFixViaServer } from './docscribeClient';
 
 interface DiffHunk {
   originalStart: number;
@@ -152,45 +153,62 @@ export async function applyFix(
   const config = vscode.workspace.getConfiguration('docscribe');
   const useBundleExec = config.get<boolean>('useBundleExec', true);
   const commandPath = config.get<string>('commandPath', 'docscribe');
+  const bundlePath = config.get<string>('bundlePath', 'bundle');
   const rbsEnabled = config.get<boolean>('useRbs', false);
   const useRbs = rbsEnabled && gemfileHasRbs(path.join(root, 'Gemfile'));
 
-  const fixFlags = mode === 'aggressive' ? ['-A', '-k'] : ['-a'];
-  const omitBoilerplate = config.get<boolean>('omitBoilerplate', false);
-  if (omitBoilerplate) fixFlags.push('-B');
+  let fixedCode: string | null = null;
 
-  const cmd = useBundleExec ? 'bundle' : commandPath;
-  const cmdArgs = useBundleExec
-    ? ['exec', commandPath, ...fixFlags, '--stdin', ...(useRbs ? ['--rbs-collection'] : [])]
-    : [...fixFlags, '--stdin', ...(useRbs ? ['--rbs-collection'] : [])];
-
-  const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>(
-    (resolve) => {
-      const child = execFile(
-        cmd,
-        cmdArgs,
-        { cwd: root, maxBuffer: 10 * 1024 * 1024 },
-        (err, stdout, stderr) => {
-          resolve({
-            stdout: stdout || '',
-            stderr: stderr || '',
-            code: err ? (typeof err.code === 'number' ? err.code : 2) : 0,
-          });
-        },
-      );
-      if (child.stdin) {
-        child.stdin.write(code);
-        child.stdin.end();
+  const useServer = config.get<boolean>('useServer', true);
+  if (useServer) {
+    const serverRunning = await ensureServerRunning(root);
+    if (serverRunning) {
+      try {
+        fixedCode = await applyFixViaServer(code, mode);
+      } catch {
+        // fallback to CLI
       }
-    },
-  );
-
-  if ((result.code ?? 2) >= 2 || (!result.stdout && !result.stderr)) {
-    vscode.window.showErrorMessage('DocScribe: failed to apply fix');
-    return;
+    }
   }
 
-  const fixedCode = result.stdout || result.stderr;
+  if (fixedCode === null) {
+    const fixFlags = mode === 'aggressive' ? ['-A', '-k'] : ['-a'];
+    const omitBoilerplate = config.get<boolean>('omitBoilerplate', false);
+    if (omitBoilerplate) fixFlags.push('-B');
+
+    const cmd = useBundleExec ? bundlePath : commandPath;
+    const cmdArgs = useBundleExec
+      ? ['exec', commandPath, ...fixFlags, '--stdin', ...(useRbs ? ['--rbs-collection'] : [])]
+      : [...fixFlags, '--stdin', ...(useRbs ? ['--rbs-collection'] : [])];
+
+    const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>(
+      (resolve) => {
+        const child = execFile(
+          cmd,
+          cmdArgs,
+          { cwd: root, maxBuffer: 10 * 1024 * 1024 },
+          (err, stdout, stderr) => {
+            resolve({
+              stdout: stdout || '',
+              stderr: stderr || '',
+              code: err ? (typeof err.code === 'number' ? err.code : 2) : 0,
+            });
+          },
+        );
+        if (child.stdin) {
+          child.stdin.write(code);
+          child.stdin.end();
+        }
+      },
+    );
+
+    if ((result.code ?? 2) >= 2 || (!result.stdout && !result.stderr)) {
+      vscode.window.showErrorMessage('DocScribe: failed to apply fix');
+      return;
+    }
+
+    fixedCode = result.stdout || result.stderr;
+  }
 
   if (diagnostic) {
     try {

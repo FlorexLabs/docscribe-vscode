@@ -3,7 +3,15 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as sinon from 'sinon';
-import { findProjectRoot, execCommand } from '../../docscribeRunner';
+import {
+  findProjectRoot,
+  execCommand,
+  parseCapabilities,
+  clearCachedCapabilitiesForTesting,
+  clearServerModeWarningForTesting,
+  collectWorkspaceFiles,
+  chunkArray,
+} from '../../docscribeRunner';
 
 const fixturesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'test', 'suite', 'fixtures');
 
@@ -119,6 +127,135 @@ suite('docscribeRunner', () => {
       assert.strictEqual(result.stdout, 'stdout');
       assert.strictEqual(result.stderr, 'stderr');
       assert.strictEqual(result.output, 'stdout\nstderr');
+    });
+  });
+
+  suite('parseCapabilities', () => {
+    teardown(() => {
+      clearCachedCapabilitiesForTesting();
+      clearServerModeWarningForTesting();
+    });
+
+    test('returns null for empty string', () => {
+      assert.strictEqual(parseCapabilities(''), null);
+    });
+
+    test('returns null for non-version string', () => {
+      assert.strictEqual(parseCapabilities('not-a-version'), null);
+    });
+
+    test('parses 1.4.9 — no server, no batch', () => {
+      const caps = parseCapabilities('1.4.9');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.version, '1.4.9');
+      assert.strictEqual(caps.hasServerMode, false);
+      assert.strictEqual(caps.hasBatchMode, false);
+      assert.strictEqual(caps.hasRbsCollection, true);
+      assert.strictEqual(caps.hasExitCodeSemantics, false);
+    });
+
+    test('parses 1.5.0 — no server', () => {
+      const caps = parseCapabilities('1.5.0');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.hasServerMode, false);
+      assert.strictEqual(caps.hasBatchMode, false);
+      assert.strictEqual(caps.hasExitCodeSemantics, true);
+    });
+
+    test('parses 1.5.1 — server yes, batch no', () => {
+      const caps = parseCapabilities('1.5.1');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.version, '1.5.1');
+      assert.strictEqual(caps.hasServerMode, true);
+      assert.strictEqual(caps.hasBatchMode, false);
+    });
+
+    test('parses 1.5.2 — server and batch', () => {
+      const caps = parseCapabilities('1.5.2');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.hasServerMode, true);
+      assert.strictEqual(caps.hasBatchMode, true);
+    });
+
+    test('parses 1.6.1 — server and batch', () => {
+      const caps = parseCapabilities('1.6.1');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.hasServerMode, true);
+      assert.strictEqual(caps.hasBatchMode, true);
+    });
+
+    test('parses 2.0.0 — server and batch', () => {
+      const caps = parseCapabilities('2.0.0');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.hasServerMode, true);
+      assert.strictEqual(caps.hasBatchMode, true);
+    });
+
+    test('handles version with surrounding text', () => {
+      const caps = parseCapabilities('docscribe 1.6.1');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.version, '1.6.1');
+      assert.strictEqual(caps.hasServerMode, true);
+    });
+
+    test('handles version with newline', () => {
+      const caps = parseCapabilities('1.5.1\n');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.version, '1.5.1');
+      assert.strictEqual(caps.hasServerMode, true);
+    });
+  });
+
+  suite('collectWorkspaceFiles', () => {
+    test('finds rb and rake files and excludes node_modules', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-collect-'));
+      try {
+        fs.mkdirSync(path.join(root, 'lib'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
+        fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'lib', 'a.rb'), '');
+        fs.writeFileSync(path.join(root, 'lib', 'b.rake'), '');
+        fs.writeFileSync(path.join(root, 'Rakefile'), '');
+        fs.writeFileSync(path.join(root, 'node_modules', 'c.rb'), '');
+        fs.writeFileSync(path.join(root, '.git', 'd.rb'), '');
+        fs.writeFileSync(path.join(root, 'README.md'), '');
+        const files = collectWorkspaceFiles(root);
+        assert.ok(files.includes(path.join(root, 'lib', 'a.rb')));
+        assert.ok(files.includes(path.join(root, 'lib', 'b.rake')));
+        assert.ok(files.includes(path.join(root, 'Rakefile')));
+        assert.ok(!files.includes(path.join(root, 'node_modules', 'c.rb')));
+        assert.ok(!files.includes(path.join(root, '.git', 'd.rb')));
+        assert.ok(!files.includes(path.join(root, 'README.md')));
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('returns sorted list', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-collect-'));
+      try {
+        fs.writeFileSync(path.join(root, 'z.rb'), '');
+        fs.writeFileSync(path.join(root, 'a.rb'), '');
+        const files = collectWorkspaceFiles(root);
+        const sorted = [...files].sort();
+        assert.deepStrictEqual(files, sorted);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  suite('chunkArray', () => {
+    test('splits array into chunks', () => {
+      assert.deepStrictEqual(chunkArray([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
+    });
+
+    test('returns single chunk if size larger than array', () => {
+      assert.deepStrictEqual(chunkArray([1, 2], 10), [[1, 2]]);
+    });
+
+    test('handles empty array', () => {
+      assert.deepStrictEqual(chunkArray([], 32), []);
     });
   });
 });

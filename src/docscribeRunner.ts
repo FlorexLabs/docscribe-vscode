@@ -2,6 +2,16 @@ import * as vscode from 'vscode';
 import * as proc from './execAsync';
 import * as path from 'path';
 import * as fs from 'fs';
+import { ensureServerRunning, checkFileViaServer } from './docscribeClient';
+
+let docscribeLog: vscode.OutputChannel | undefined;
+
+function logInfo(message: string): void {
+  if (!docscribeLog) {
+    docscribeLog = vscode.window.createOutputChannel('DocScribe');
+  }
+  docscribeLog.appendLine(message);
+}
 
 /**
  * Options for the docscribe runner.
@@ -21,6 +31,19 @@ export interface RunOptions {
   strategy?: 'check' | 'safe' | 'aggressive' | 'updateTypes';
   /** If true (default), uses `--format json` for machine-readable output. */
   json?: boolean;
+}
+
+/**
+ * Checks whether the docscribe gem is installed in the current project.
+ *
+ * @param cwd - Working directory (project root) to run the check in.
+ * @returns true if `bundle exec docscribe --version` succeeds.
+ */
+export async function checkGemInstalled(cwd: string): Promise<boolean> {
+  const config = vscode.workspace.getConfiguration('docscribe');
+  const bundlePath = config.get<string>('bundlePath', 'bundle');
+  const result = await execCommand(bundlePath, ['exec', 'docscribe', '--version'], cwd);
+  return result.success;
 }
 
 /**
@@ -84,6 +107,153 @@ export function gemfileHasRbs(gemfilePath: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Collect Ruby source files in a workspace for `check_batch`.
+ *
+ * Walks the project tree and returns absolute paths for `*.rb`, `*.rake`,
+ * and `Rakefile`. Skips common non-source directories
+ * (`.git`, `node_modules`, `vendor`, `out`, etc.) and hidden dirs.
+ * Does not read `.gitignore` — uses a fixed exclude set matching the
+ * RubyMine plugin's `WorkspaceCheckChunking.kt`.
+ *
+ * @param projectRoot - Absolute project root (contains `Gemfile`).
+ * @param maxFiles - Hard limit to avoid pathological walks.
+ * @returns Sorted list of absolute file paths.
+ */
+export function collectWorkspaceFiles(projectRoot: string, maxFiles = 5000): string[] {
+  const files: string[] = [];
+  const excludeDirs = new Set([
+    '.git',
+    'node_modules',
+    'vendor',
+    '.vscode-test',
+    'out',
+    'dist',
+    'build',
+    'tmp',
+    '.tmp-e2e',
+    '.idea',
+    '.vscode',
+    'coverage',
+    'log',
+    '.ruby-lsp',
+  ]);
+  const walk = (dir: string): void => {
+    if (files.length >= maxFiles) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (files.length >= maxFiles) break;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (excludeDirs.has(entry.name)) continue;
+        if (entry.name.startsWith('.')) continue;
+        // Avoid following symlinked dirs to prevent cycles
+        try {
+          if (entry.isSymbolicLink()) continue;
+        } catch {
+          // ignore
+        }
+        walk(fullPath);
+      } else if (entry.isFile()) {
+        if (
+          entry.name.endsWith('.rb') ||
+          entry.name.endsWith('.rake') ||
+          entry.name === 'Rakefile'
+        ) {
+          files.push(fullPath);
+        }
+      }
+    }
+  };
+  walk(projectRoot);
+  files.sort();
+  return files;
+}
+
+/**
+ * Split an array into chunks of given size.
+ *
+ * @param arr - Input array.
+ * @param size - Chunk size (must be >0).
+ * @returns Array of chunks.
+ */
+export function chunkArray<T>(arr: T[], size: number): T[][] {
+  if (size <= 0) return [arr.slice()];
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
+export interface Capabilities {
+  version: string;
+  hasServerMode: boolean;
+  hasBatchMode: boolean;
+  hasRbsCollection: boolean;
+  hasExitCodeSemantics: boolean;
+}
+
+let cachedCapabilities: Capabilities | null = null;
+
+export function getCachedCapabilities(): Capabilities | null {
+  return cachedCapabilities;
+}
+
+export function clearCachedCapabilitiesForTesting(): void {
+  cachedCapabilities = null;
+}
+
+let serverModeWarningShown = false;
+
+export function clearServerModeWarningForTesting(): void {
+  serverModeWarningShown = false;
+}
+
+export async function detectCapabilities(projectRoot: string): Promise<Capabilities | null> {
+  const config = vscode.workspace.getConfiguration('docscribe');
+  const commandPath = config.get<string>('commandPath', 'docscribe');
+  const useBundleExec = config.get<boolean>('useBundleExec', true);
+
+  const cmd = useBundleExec ? 'bundle' : commandPath;
+  const args = useBundleExec ? ['exec', commandPath, '--version'] : ['--version'];
+
+  try {
+    const result = await execCommand(cmd, args, projectRoot);
+    if (!result.success) return null;
+    const version = result.stdout.trim();
+    cachedCapabilities = parseCapabilities(version);
+    return cachedCapabilities;
+  } catch {
+    return null;
+  }
+}
+
+export function parseCapabilities(version: string): Capabilities | null {
+  const match = version.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  const major = parseInt(match[1], 10);
+  const minor = parseInt(match[2], 10);
+  const patch = parseInt(match[3], 10);
+  const atLeast = (tMajor: number, tMinor: number, tPatch: number): boolean =>
+    major > tMajor ||
+    (major === tMajor && minor > tMinor) ||
+    (major === tMajor && minor === tMinor && patch >= tPatch);
+  // Server mode introduced in 1.5.1, batch mode (check_batch) in 1.5.2
+  return {
+    version: `${major}.${minor}.${patch}`,
+    hasServerMode: atLeast(1, 5, 1),
+    hasBatchMode: atLeast(1, 5, 2),
+    hasRbsCollection: atLeast(1, 4, 0),
+    hasExitCodeSemantics: atLeast(1, 5, 0),
+  };
 }
 
 /**
@@ -246,6 +416,34 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
     };
   }
 
+  const caps = await detectCapabilities(projectRoot);
+  if (caps) {
+    logInfo(`DocScribe: detected docscribe v${caps.version}`);
+    if (!caps.hasServerMode && !serverModeWarningShown) {
+      serverModeWarningShown = true;
+      vscode.window.showWarningMessage(
+        `DocScribe gem ${caps.version} does not support server mode (requires >=1.5.1). Using CLI. Please upgrade: bundle update docscribe`,
+      );
+    } else if (caps.hasServerMode && !caps.hasBatchMode && !serverModeWarningShown) {
+      // 1.5.1 has server but check_batch buggy on Ruby 4.0 — warn once
+      try {
+        const rubyVersion = await new Promise<string>((resolve) => {
+          proc.execFile('ruby', ['--version'], {}, (err: Error | null, stdout: string) => {
+            resolve(err ? '' : stdout);
+          });
+        });
+        if (rubyVersion.includes('ruby 4.')) {
+          serverModeWarningShown = true;
+          vscode.window.showWarningMessage(
+            `DocScribe ${caps.version} has known check_batch issue on Ruby 4.0. Upgrade to >=1.6.1`,
+          );
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   const config = vscode.workspace.getConfiguration('docscribe');
   const strategy = options.strategy || 'check';
   const json = options.json ?? true;
@@ -260,11 +458,35 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
     options.workspace ? undefined : filePath,
   );
 
+  const useServer = config.get<boolean>('useServer', true);
+  const canUseServer = useServer && (caps ? caps.hasServerMode : true);
+  if (canUseServer && strategy === 'check' && !options.workspace) {
+    try {
+      const serverRunning = await ensureServerRunning(projectRoot);
+      if (serverRunning) {
+        const result = await checkFileViaServer(filePath);
+        const parsed = JSON.parse(result);
+        const offenseCount = parsed?.summary?.offense_count || 0;
+        return {
+          success: true,
+          hasIssues: offenseCount > 0,
+          exitCode: offenseCount > 0 ? 1 : 0,
+          stdout: result,
+          stderr: '',
+          output: result,
+        };
+      }
+    } catch {
+      // Fallback to CLI
+    }
+  }
+
   const useBundleExec = config.get<boolean>('useBundleExec', true);
   const commandPath = config.get<string>('commandPath', 'docscribe');
+  const bundlePath = config.get<string>('bundlePath', 'bundle');
 
   if (useBundleExec) {
-    return execCommand('bundle', ['exec', commandPath, ...args], projectRoot);
+    return execCommand(bundlePath, ['exec', commandPath, ...args], projectRoot);
   }
   return execCommand(commandPath, args, projectRoot);
 }

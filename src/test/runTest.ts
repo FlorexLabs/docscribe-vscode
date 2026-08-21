@@ -9,11 +9,14 @@ async function main() {
     const vsCodeVersionIndex = process.argv.indexOf('--vscode-version');
     const version = vsCodeVersionIndex >= 0 ? process.argv[vsCodeVersionIndex + 1] : undefined;
 
+    const workspaceIndex = process.argv.indexOf('--workspace');
+    const workspace = workspaceIndex >= 0 ? process.argv[workspaceIndex + 1] : undefined;
+
     const exitCode = await runTests({
       version,
       extensionDevelopmentPath,
       extensionTestsPath,
-      launchArgs: [],
+      launchArgs: workspace ? [workspace] : [],
     });
 
     if (exitCode !== 0) {

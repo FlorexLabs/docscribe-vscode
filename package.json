@@ -2,7 +2,7 @@
   "name": "docscribe-vscode",
   "displayName": "DocScribe",
   "description": "Auto-generate inline YARD documentation for Ruby methods using docscribe",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "unurgunite",
   "license": "MIT",
   "icon": "icon.png",
@@ -62,6 +62,10 @@
       {
         "command": "docscribe.updateTypes",
         "title": "DocScribe: Update types from RBS"
+      },
+      {
+        "command": "docscribe.doctor",
+        "title": "DocScribe: Doctor — environment diagnostics"
       }
     ],
     "keybindings": [
@@ -160,6 +164,21 @@
           "type": "boolean",
           "default": false,
           "description": "Omit boilerplate description text from generated YARD docs (passes -B to docscribe)"
+        },
+        "docscribe.rubyPath": {
+          "type": "string",
+          "default": "ruby",
+          "description": "Path to Ruby executable (default: ruby)"
+        },
+        "docscribe.bundlePath": {
+          "type": "string",
+          "default": "bundle",
+          "description": "Path to Bundler executable (default: bundle)"
+        },
+        "docscribe.useServer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use persistent docscribe server mode for faster checks (Unix socket)"
         }
       }
     }
@@ -184,7 +203,7 @@
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
-    "@vscode/test-electron": "^3.0.0",
+    "@vscode/test-electron": "^3.1.0",
     "eslint": "^9.0.0",
     "eslint-config-prettier": "^10.1.8",
     "glob": "^13.0.6",

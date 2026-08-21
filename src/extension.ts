@@ -6,13 +6,15 @@ import {
   detectCapabilities,
   getCachedCapabilities,
   checkGemInstalled,
+  collectWorkspaceFiles,
+  chunkArray,
   type RunResult,
 } from './docscribeRunner';
 import { execFile } from './execAsync';
 import { createDiagnosticProvider, checkDocument } from './diagnosticProvider';
 import { DocscribeCodeActionProvider, applyFix } from './codeActionProvider';
 import { DocscribeFoldingRangeProvider, getCommentBlockStartLines } from './foldingProvider';
-import { ensureServerRunning, stopServer } from './docscribeClient';
+import { ensureServerRunning, stopServer, checkBatchViaServer } from './docscribeClient';
 
 let outputChannel: vscode.OutputChannel;
 let statusBarItem: vscode.StatusBarItem;
@@ -141,8 +143,109 @@ export function activate(context: vscode.ExtensionContext) {
     'docscribe.checkWorkspace',
     async () => {
       if (!ensureGemInstalled()) return;
-      const result = await withProgress('DocScribe: checking workspace...', () =>
-        runDocscribe({ strategy: 'check', workspace: true }),
+      const result = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: 'DocScribe: checking workspace...',
+          cancellable: true,
+        },
+        async (progress, token) => {
+          // Try server batch mode (check_batch) when available
+          try {
+            const folders = vscode.workspace.workspaceFolders;
+            if (folders && folders.length > 0) {
+              const projectRoot = findProjectRoot(folders[0].uri.fsPath);
+              if (projectRoot) {
+                const caps = getCachedCapabilities() || (await detectCapabilities(projectRoot));
+                const useServer = vscode.workspace
+                  .getConfiguration('docscribe')
+                  .get<boolean>('useServer', true);
+                if (caps?.hasBatchMode && useServer) {
+                  const serverRunning = await ensureServerRunning(projectRoot);
+                  if (serverRunning && !token.isCancellationRequested) {
+                    const allFiles = collectWorkspaceFiles(projectRoot);
+                    if (allFiles.length === 0) {
+                      const empty = JSON.stringify({
+                        metadata: { docscribe_version: caps.version },
+                        files: [],
+                        summary: {
+                          offense_count: 0,
+                          target_file_count: 0,
+                          inspected_file_count: 0,
+                          error_count: 0,
+                        },
+                      });
+                      return {
+                        success: true,
+                        hasIssues: false,
+                        exitCode: 0,
+                        stdout: empty,
+                        stderr: '',
+                        output: empty,
+                      } as RunResult;
+                    }
+                    const chunks = chunkArray(allFiles, 32);
+                    let totalOffense = 0;
+                    let totalTarget = 0;
+                    let totalInspected = 0;
+                    let totalError = 0;
+                    const allFileEntries: unknown[] = [];
+                    for (let i = 0; i < chunks.length; i++) {
+                      if (token.isCancellationRequested) break;
+                      const chunk = chunks[i];
+                      progress.report({
+                        message: `${Math.min((i + 1) * 32, allFiles.length)}/${allFiles.length} files`,
+                        increment: (1 / chunks.length) * 100,
+                      });
+                      try {
+                        const json = await checkBatchViaServer(chunk);
+                        const parsed = JSON.parse(json) as {
+                          files: unknown[];
+                          summary: {
+                            offense_count: number;
+                            target_file_count: number;
+                            inspected_file_count: number;
+                            error_count: number;
+                          };
+                        };
+                        allFileEntries.push(...parsed.files);
+                        totalOffense += parsed.summary.offense_count || 0;
+                        totalTarget += parsed.summary.target_file_count || chunk.length;
+                        totalInspected += parsed.summary.inspected_file_count || 0;
+                        totalError += parsed.summary.error_count || 0;
+                      } catch {
+                        // Batch chunk failed — fallback to CLI for whole workspace
+                        return runDocscribe({ strategy: 'check', workspace: true });
+                      }
+                    }
+                    const aggregated = {
+                      metadata: { docscribe_version: caps.version },
+                      files: allFileEntries,
+                      summary: {
+                        offense_count: totalOffense,
+                        target_file_count: totalTarget,
+                        inspected_file_count: totalInspected,
+                        error_count: totalError,
+                      },
+                    };
+                    const stdout = JSON.stringify(aggregated);
+                    return {
+                      success: true,
+                      hasIssues: totalOffense > 0,
+                      exitCode: totalOffense > 0 || totalError > 0 ? 1 : 0,
+                      stdout,
+                      stderr: '',
+                      output: stdout,
+                    } as RunResult;
+                  }
+                }
+              }
+            }
+          } catch {
+            // Fall through to CLI on any batch error
+          }
+          return runDocscribe({ strategy: 'check', workspace: true });
+        },
       );
       showResult(result);
     },

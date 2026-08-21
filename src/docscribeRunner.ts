@@ -109,6 +109,90 @@ export function gemfileHasRbs(gemfilePath: string): boolean {
   }
 }
 
+/**
+ * Collect Ruby source files in a workspace for `check_batch`.
+ *
+ * Walks the project tree and returns absolute paths for `*.rb`, `*.rake`,
+ * and `Rakefile`. Skips common non-source directories
+ * (`.git`, `node_modules`, `vendor`, `out`, etc.) and hidden dirs.
+ * Does not read `.gitignore` — uses a fixed exclude set matching the
+ * RubyMine plugin's `WorkspaceCheckChunking.kt`.
+ *
+ * @param projectRoot - Absolute project root (contains `Gemfile`).
+ * @param maxFiles - Hard limit to avoid pathological walks.
+ * @returns Sorted list of absolute file paths.
+ */
+export function collectWorkspaceFiles(projectRoot: string, maxFiles = 5000): string[] {
+  const files: string[] = [];
+  const excludeDirs = new Set([
+    '.git',
+    'node_modules',
+    'vendor',
+    '.vscode-test',
+    'out',
+    'dist',
+    'build',
+    'tmp',
+    '.tmp-e2e',
+    '.idea',
+    '.vscode',
+    'coverage',
+    'log',
+    '.ruby-lsp',
+  ]);
+  const walk = (dir: string): void => {
+    if (files.length >= maxFiles) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (files.length >= maxFiles) break;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (excludeDirs.has(entry.name)) continue;
+        if (entry.name.startsWith('.')) continue;
+        // Avoid following symlinked dirs to prevent cycles
+        try {
+          if (entry.isSymbolicLink()) continue;
+        } catch {
+          // ignore
+        }
+        walk(fullPath);
+      } else if (entry.isFile()) {
+        if (
+          entry.name.endsWith('.rb') ||
+          entry.name.endsWith('.rake') ||
+          entry.name === 'Rakefile'
+        ) {
+          files.push(fullPath);
+        }
+      }
+    }
+  };
+  walk(projectRoot);
+  files.sort();
+  return files;
+}
+
+/**
+ * Split an array into chunks of given size.
+ *
+ * @param arr - Input array.
+ * @param size - Chunk size (must be >0).
+ * @returns Array of chunks.
+ */
+export function chunkArray<T>(arr: T[], size: number): T[][] {
+  if (size <= 0) return [arr.slice()];
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
 export interface Capabilities {
   version: string;
   hasServerMode: boolean;

@@ -8,6 +8,7 @@ import {
   localeEnv,
   serverStartScript,
   changesToCheckJson,
+  batchResultsToJson,
   setSocketPathForTesting,
   getSocketPath,
   pidPath,
@@ -225,6 +226,56 @@ suite('docscribeClient', () => {
       const cleaned = handleStaleSocket(sock);
       assert.strictEqual(cleaned, true);
       assert.strictEqual(fs.existsSync(sock), false);
+    });
+  });
+
+  suite('batchResultsToJson', () => {
+    test('converts ok/fail results to CLI JSON', () => {
+      const json = batchResultsToJson([
+        { file: '/tmp/a.rb', status: 'fail', changes: [{ line: 2 }, { line: 5 }] },
+        { file: '/tmp/b.rb', status: 'ok', changes: [] },
+      ]);
+      const parsed = JSON.parse(json);
+      assert.strictEqual(parsed.summary.offense_count, 2);
+      assert.strictEqual(parsed.summary.target_file_count, 2);
+      assert.strictEqual(parsed.summary.inspected_file_count, 2);
+      assert.strictEqual(parsed.summary.error_count, 0);
+      assert.strictEqual(parsed.files.length, 2);
+      assert.strictEqual(parsed.files[0].path, '/tmp/a.rb');
+      assert.strictEqual(parsed.files[0].offenses.length, 2);
+      assert.strictEqual(parsed.files[1].offenses.length, 0);
+    });
+
+    test('counts error status in error_count and skips file entry', () => {
+      const json = batchResultsToJson([
+        { file: '/tmp/a.rb', status: 'ok', changes: [] },
+        { file: '/tmp/b.rb', status: 'error', error: 'File not found' },
+      ]);
+      const parsed = JSON.parse(json);
+      assert.strictEqual(parsed.summary.target_file_count, 2);
+      assert.strictEqual(parsed.summary.inspected_file_count, 1);
+      assert.strictEqual(parsed.summary.error_count, 1);
+      assert.strictEqual(parsed.files.length, 1);
+    });
+
+    test('handles empty results', () => {
+      const json = batchResultsToJson([]);
+      const parsed = JSON.parse(json);
+      assert.strictEqual(parsed.summary.offense_count, 0);
+      assert.strictEqual(parsed.summary.target_file_count, 0);
+      assert.strictEqual(parsed.files.length, 0);
+    });
+
+    test('skips non-object entries and missing file', () => {
+      const json = batchResultsToJson([
+        null,
+        { status: 'ok', changes: [] },
+        { file: '/tmp/c.rb', status: 'ok', changes: [{ line: 1 }] },
+      ]);
+      const parsed = JSON.parse(json);
+      assert.strictEqual(parsed.summary.target_file_count, 1);
+      assert.strictEqual(parsed.files.length, 1);
+      assert.strictEqual(parsed.files[0].path, '/tmp/c.rb');
     });
   });
 });

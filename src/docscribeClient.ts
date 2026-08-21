@@ -156,6 +156,97 @@ export function parseSocketPath(stdout: string): string | null {
 }
 
 /**
+ * Path to the pid file for a given socket.
+ *
+ * The daemon writes `${socket}.pid` with its PID (see `Daemon#write_pid`
+ * in the gem). Used to detect stale sockets.
+ *
+ * @param socket - Absolute socket path.
+ * @returns Absolute pid file path.
+ */
+export function pidPath(socket: string): string {
+  return `${socket}.pid`;
+}
+
+/**
+ * Read PID from the pid file.
+ *
+ * @param socket - Absolute socket path.
+ * @returns PID as number, or `null` if missing/unreadable.
+ */
+export function readPid(socket: string): number | null {
+  try {
+    const raw = fs.readFileSync(pidPath(socket), 'utf8').trim();
+    const pid = Number.parseInt(raw, 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check if a process with given PID is alive.
+ *
+ * Uses `process.kill(pid, 0)` — does not send signal, just checks existence.
+ * `EPERM` means process exists but no permission → alive.
+ *
+ * @param pid - Process identifier.
+ * @returns `true` if process is alive.
+ */
+export function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    // ESRCH = no such process, EPERM = exists but not permitted
+    if (code === 'ESRCH') return false;
+    return code === 'EPERM';
+  }
+}
+
+/**
+ * Remove stale socket and pid files (best-effort).
+ *
+ * @param socket - Absolute socket path to clean.
+ */
+export function cleanSocketFiles(socket: string): void {
+  try {
+    fs.unlinkSync(socket);
+  } catch {
+    // ignore — may not exist
+  }
+  try {
+    fs.unlinkSync(pidPath(socket));
+  } catch {
+    // ignore
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Handle `ECONNREFUSED` on a socket.
+ *
+ * Mirrors the gem logic (`Server.handle_stale_socket?`):
+ * if PID is alive → daemon is starting, don't clean;
+ * if PID dead/missing → clean stale files.
+ *
+ * @param socket - Absolute socket path that refused connection.
+ * @returns `true` if files were cleaned, `false` if left intact (process alive).
+ */
+export function handleStaleSocket(socket: string): boolean {
+  const pid = readPid(socket);
+  if (pid !== null && isProcessAlive(pid)) {
+    return false;
+  }
+  cleanSocketFiles(socket);
+  return true;
+}
+
+/**
  * Ensure the docscribe daemon is running for a project.
  *
  * 1. If a socket path was already discovered and `ping` succeeds, done.
@@ -167,11 +258,41 @@ export function parseSocketPath(stdout: string): string | null {
  */
 export async function ensureServerRunning(projectRoot: string): Promise<boolean> {
   if (socketPath) {
-    try {
-      await sendRequest('ping');
-      return true;
-    } catch {
-      // Socket may be stale; restart below (stale handling in fix/dead-socket-restart).
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await sendRequest('ping');
+        return true;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code === 'ECONNREFUSED') {
+          const cleaned = handleStaleSocket(socketPath);
+          if (!cleaned) {
+            // Daemon is starting (PID alive) — wait and retry
+            if (attempt < 2) {
+              await sleep(500);
+              continue;
+            }
+            return false;
+          }
+          break;
+        }
+        if (code === 'ENOENT' || code === 'ENOTSOCK') {
+          cleanSocketFiles(socketPath);
+          break;
+        }
+        // Timeout or other transient error — retry a couple times
+        if (attempt < 2) {
+          await sleep(500);
+          continue;
+        }
+        // Last attempt failed — treat stale and break to restart
+        if (code === undefined) {
+          // For timeout (no code) we don't clean aggressively
+          break;
+        }
+        cleanSocketFiles(socketPath);
+        break;
+      }
     }
   }
 
@@ -201,31 +322,41 @@ export async function ensureServerRunning(projectRoot: string): Promise<boolean>
   if (!discovered) return false;
 
   socketPath = discovered;
-  try {
-    await sendRequest('ping');
-    return true;
-  } catch {
-    socketPath = null;
-    return false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await sendRequest('ping');
+      return true;
+    } catch {
+      if (attempt < 2) {
+        await sleep(500);
+        continue;
+      }
+      socketPath = null;
+      return false;
+    }
   }
+  socketPath = null;
+  return false;
 }
 
 /**
  * Gracefully stop the daemon (shutdown RPC + best-effort file cleanup).
+ *
+ * The daemon itself removes socket/pid on `shutdown` (`Daemon#cleanup`);
+ * we clean again as a safeguard for stale leftovers.
  */
 export async function stopServer(): Promise<void> {
+  const target = socketPath;
   try {
     await sendRequest('shutdown');
   } catch {
     // ignore
   }
-  if (socketPath) {
-    try {
-      fs.unlinkSync(socketPath);
-    } catch {
-      // ignore
+  if (target) {
+    cleanSocketFiles(target);
+    if (socketPath === target) {
+      socketPath = null;
     }
-    socketPath = null;
   }
 }
 

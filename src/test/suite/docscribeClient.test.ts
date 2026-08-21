@@ -1,4 +1,8 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
 import {
   parseSocketPath,
   localeEnv,
@@ -6,6 +10,11 @@ import {
   changesToCheckJson,
   setSocketPathForTesting,
   getSocketPath,
+  pidPath,
+  readPid,
+  isProcessAlive,
+  cleanSocketFiles,
+  handleStaleSocket,
 } from '../../docscribeClient';
 
 suite('docscribeClient', () => {
@@ -121,6 +130,101 @@ suite('docscribeClient', () => {
       assert.strictEqual(getSocketPath(), '/tmp/test.sock');
       setSocketPathForTesting(null);
       assert.strictEqual(getSocketPath(), null);
+    });
+  });
+
+  suite('pidPath', () => {
+    test('appends .pid', () => {
+      assert.strictEqual(pidPath('/tmp/docscribe-abc.sock'), '/tmp/docscribe-abc.sock.pid');
+    });
+  });
+
+  suite('readPid / isProcessAlive / cleanSocketFiles', () => {
+    test('readPid returns null when file missing', () => {
+      assert.strictEqual(readPid('/tmp/nonexistent-ds-413.sock'), null);
+    });
+
+    test('readPid reads written pid', () => {
+      const sock = path.join(os.tmpdir(), `ds-test-${Date.now()}.sock`);
+      const pidFile = pidPath(sock);
+      try {
+        fs.writeFileSync(pidFile, `${process.pid}\n`);
+        assert.strictEqual(readPid(sock), process.pid);
+      } finally {
+        try {
+          fs.unlinkSync(pidFile);
+        } catch {
+          // ignore
+        }
+      }
+    });
+
+    test('isProcessAlive returns true for current pid', () => {
+      assert.strictEqual(isProcessAlive(process.pid), true);
+    });
+
+    test('isProcessAlive returns false for non-existent pid', () => {
+      assert.strictEqual(isProcessAlive(999999), false);
+    });
+
+    test('cleanSocketFiles removes socket and pid', () => {
+      const sock = path.join(os.tmpdir(), `ds-test-${Date.now()}.sock`);
+      const pidFile = pidPath(sock);
+      fs.writeFileSync(sock, '');
+      fs.writeFileSync(pidFile, '12345');
+      cleanSocketFiles(sock);
+      assert.strictEqual(fs.existsSync(sock), false);
+      assert.strictEqual(fs.existsSync(pidFile), false);
+    });
+
+    test('cleanSocketFiles is no-op when files missing', () => {
+      const sock = path.join(os.tmpdir(), `ds-test-${Date.now()}-missing.sock`);
+      assert.doesNotThrow(() => cleanSocketFiles(sock));
+    });
+  });
+
+  suite('handleStaleSocket', () => {
+    test('does not clean when pid is alive', () => {
+      const sock = path.join(os.tmpdir(), `ds-test-${Date.now()}.sock`);
+      const pidFile = pidPath(sock);
+      try {
+        fs.writeFileSync(sock, '');
+        fs.writeFileSync(pidFile, `${process.pid}`);
+        const cleaned = handleStaleSocket(sock);
+        assert.strictEqual(cleaned, false);
+        assert.strictEqual(fs.existsSync(sock), true);
+        assert.strictEqual(fs.existsSync(pidFile), true);
+      } finally {
+        try {
+          fs.unlinkSync(sock);
+        } catch {
+          // ignore
+        }
+        try {
+          fs.unlinkSync(pidFile);
+        } catch {
+          // ignore
+        }
+      }
+    });
+
+    test('cleans when pid is dead', () => {
+      const sock = path.join(os.tmpdir(), `ds-test-${Date.now()}.sock`);
+      const pidFile = pidPath(sock);
+      fs.writeFileSync(sock, '');
+      fs.writeFileSync(pidFile, '999999');
+      const cleaned = handleStaleSocket(sock);
+      assert.strictEqual(cleaned, true);
+      assert.strictEqual(fs.existsSync(sock), false);
+      assert.strictEqual(fs.existsSync(pidFile), false);
+    });
+
+    test('cleans when pid file missing', () => {
+      const sock = path.join(os.tmpdir(), `ds-test-${Date.now()}.sock`);
+      fs.writeFileSync(sock, '');
+      const cleaned = handleStaleSocket(sock);
+      assert.strictEqual(cleaned, true);
+      assert.strictEqual(fs.existsSync(sock), false);
     });
   });
 });

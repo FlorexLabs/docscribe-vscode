@@ -5,14 +5,17 @@ import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { execFile } from './execAsync';
 
-const SOCKET_DIR = path.join(os.tmpdir(), 'docscribe');
-const SOCKET_PATH = path.join(SOCKET_DIR, 'docscribe.sock');
-
+/**
+ * JSON-RPC request sent over the Unix socket.
+ *
+ * `params` is a JSON object (the daemon reads `params['file']`,
+ * `params['strategy']`, etc.), never an array.
+ */
 interface JsonRpcRequest {
   jsonrpc: '2.0';
   id: number;
   method: string;
-  params?: unknown[];
+  params?: Record<string, unknown>;
 }
 
 interface JsonRpcResponse {
@@ -22,23 +25,96 @@ interface JsonRpcResponse {
   error?: { code: number; message: string };
 }
 
-export function getSocketPath(): string {
-  return SOCKET_PATH;
+/**
+ * The real socket path of the docscribe daemon for the current project.
+ *
+ * The daemon derives it from the project root and environment files
+ * (`Gemfile.lock`, `rbs_collection.lock.yaml`), so it cannot be computed
+ * by the extension. It is captured from the daemon process stdout.
+ */
+let socketPath: string | null = null;
+
+/**
+ * The current daemon socket path discovered from stdout, or `null`.
+ */
+export function getSocketPath(): string | null {
+  return socketPath;
 }
 
-function sendRequest(method: string, params?: unknown[]): Promise<unknown> {
+/**
+ * Override the socket path (used by tests).
+ */
+export function setSocketPathForTesting(value: string | null): void {
+  socketPath = value;
+}
+
+/**
+ * The Ruby snippet used to start the daemon and print its socket path.
+ *
+ * Runs `ensure_running!` (which forks the daemon and returns) and then
+ * prints the real socket path (`{SOCKET_DIR}/docscribe-<md5>.sock`) as the
+ * first line of stdout.
+ */
+export function serverStartScript(): string {
+  return (
+    "require 'docscribe/server'; " +
+    'Docscribe::Server.ensure_running!(daemonize: false, timeout: 15); ' +
+    'puts Docscribe::Server.socket_path'
+  );
+}
+
+/**
+ * Environment for the daemon child process.
+ *
+ * macOS GUI-launched processes often have no `LANG` set, which makes Ruby
+ * read source files as US-ASCII and fail on non-ASCII content. Fall back
+ * to `en_US.UTF-8` and pin both `LANG` and `LC_ALL`. The rest of the
+ * current environment (PATH, GEM_HOME, rbenv, ...) must be preserved —
+ * `execFile` replaces the entire environment when `env` is given.
+ */
+export function localeEnv(): Record<string, string | undefined> {
+  const lang = process.env.LANG && process.env.LANG.trim() ? process.env.LANG : 'en_US.UTF-8';
+  return { ...process.env, LANG: lang, LC_ALL: lang };
+}
+
+/**
+ * Sends a JSON-RPC request to the daemon over the discovered Unix socket.
+ *
+ * @param method - RPC method (`ping`, `check`, `fix`, `check_batch`, `shutdown`).
+ * @param params - Object-form parameters (must not be an array).
+ * @returns The `result` field of the response.
+ */
+function sendRequest(method: string, params?: Record<string, unknown>): Promise<unknown> {
+  if (!socketPath) {
+    return Promise.reject(new Error('DocScribe server socket path is not set'));
+  }
   return new Promise((resolve, reject) => {
     const client = new net.Socket();
     const id = Date.now();
+
+    let data = '';
+    let settled = false;
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      client.destroy();
+      fn();
+    };
+
+    const timer = setTimeout(
+      () => finish(() => reject(new Error('Socket request timeout'))),
+      30000,
+    );
+
     const request: JsonRpcRequest = {
       jsonrpc: '2.0',
       id,
       method,
-      params,
+      ...(params ? { params } : {}),
     };
 
-    let data = '';
-    client.connect(SOCKET_PATH, () => {
+    client.connect(socketPath as string, () => {
       client.write(JSON.stringify(request) + '\n');
     });
 
@@ -48,93 +124,211 @@ function sendRequest(method: string, params?: unknown[]): Promise<unknown> {
         const response: JsonRpcResponse = JSON.parse(data);
         if (response.id !== id) return;
         if (response.error) {
-          reject(new Error(response.error.message));
+          finish(() => reject(new Error(response.error?.message || 'RPC error')));
         } else {
-          resolve(response.result);
+          finish(() => resolve(response.result));
         }
-        client.destroy();
       } catch {
         // incomplete JSON, wait for more data
       }
     });
 
-    client.on('error', (err) => {
-      client.destroy();
-      reject(err);
-    });
-
-    setTimeout(() => {
-      client.destroy();
-      reject(new Error('Socket request timeout'));
-    }, 30000);
+    client.on('error', (err) => finish(() => reject(err)));
   });
 }
 
+/**
+ * Extract the daemon socket path from the startup process stdout.
+ *
+ * The daemon prints `puts Docscribe::Server.socket_path` as the first
+ * line; any preceding warnings must be skipped, so the first line that
+ * looks like an absolute path wins.
+ *
+ * @param stdout - Full stdout of the startup process.
+ * @returns The socket path (absolute), or `null` if none found.
+ */
+export function parseSocketPath(stdout: string): string | null {
+  const line = stdout
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.startsWith('/'));
+  return line ?? null;
+}
+
+/**
+ * Ensure the docscribe daemon is running for a project.
+ *
+ * 1. If a socket path was already discovered and `ping` succeeds, done.
+ * 2. Otherwise spawns Ruby with {@link serverStartScript} in the project
+ *    root and reads the real socket path from the first stdout line.
+ *
+ * @param projectRoot - Working directory (project root) for the daemon.
+ * @returns `true` if the daemon is reachable.
+ */
 export async function ensureServerRunning(projectRoot: string): Promise<boolean> {
-  if (fs.existsSync(SOCKET_PATH)) {
+  if (socketPath) {
     try {
       await sendRequest('ping');
       return true;
     } catch {
-      try {
-        fs.unlinkSync(SOCKET_PATH);
-      } catch {}
+      // Socket may be stale; restart below (stale handling in fix/dead-socket-restart).
     }
   }
-
-  try {
-    fs.mkdirSync(SOCKET_DIR, { recursive: true });
-  } catch {}
 
   const config = vscode.workspace.getConfiguration('docscribe');
   const useBundleExec = config.get<boolean>('useBundleExec', true);
   const bundlePath = config.get<string>('bundlePath', 'bundle');
   const rubyPath = config.get<string>('rubyPath', 'ruby');
+  const script = serverStartScript();
 
-  const serverCmd = `${rubyPath} -e "require 'docscribe/server'; Docscribe::Server.ensure_running!"`;
+  const run = (): Promise<string | null> =>
+    new Promise((resolve) => {
+      execFile(
+        useBundleExec ? bundlePath : rubyPath,
+        useBundleExec ? ['exec', 'ruby', '-e', script] : ['-e', script],
+        { cwd: projectRoot, env: localeEnv() },
+        (err, stdout) => {
+          if (err) {
+            resolve(null);
+            return;
+          }
+          resolve(parseSocketPath(stdout));
+        },
+      );
+    });
 
-  return new Promise((resolve) => {
-    const child = useBundleExec
-      ? execFile(bundlePath, ['exec', 'ruby', '-e', serverCmd], { cwd: projectRoot })
-      : execFile(rubyPath, ['-e', serverCmd], { cwd: projectRoot });
+  const discovered = await run();
+  if (!discovered) return false;
 
-    setTimeout(() => {
-      if (fs.existsSync(SOCKET_PATH)) {
-        resolve(true);
-      } else {
-        resolve(false);
-      }
-    }, 3000);
-
-    child.on('error', () => resolve(false));
-  });
+  socketPath = discovered;
+  try {
+    await sendRequest('ping');
+    return true;
+  } catch {
+    socketPath = null;
+    return false;
+  }
 }
 
+/**
+ * Gracefully stop the daemon (shutdown RPC + best-effort file cleanup).
+ */
 export async function stopServer(): Promise<void> {
   try {
     await sendRequest('shutdown');
   } catch {
     // ignore
   }
-  try {
-    fs.unlinkSync(SOCKET_PATH);
-  } catch {}
+  if (socketPath) {
+    try {
+      fs.unlinkSync(socketPath);
+    } catch {
+      // ignore
+    }
+    socketPath = null;
+  }
 }
 
-export async function checkFileViaServer(filePath: string, useRbs: boolean): Promise<string> {
-  const result = await sendRequest('check', [{ file: filePath, rbs: useRbs }]);
-  return JSON.stringify(result);
+/**
+ * Convert a daemon `changes` list into the CLI `--format json` shape.
+ *
+ * The daemon `check` response is `{ status, changed, changes }` where each
+ * change entry carries a `line`. The CLI JSON output uses files/offenses
+ * with a `summary.offense_count`, which consumers (status bar, runner)
+ * already parse.
+ *
+ * @param filePath - The file the changes belong to.
+ * @param changes - Entries from the daemon response.
+ * @returns A JSON string in CLI `--format json` format.
+ */
+export function changesToCheckJson(filePath: string, changes: unknown): string {
+  const offenses = (Array.isArray(changes) ? changes : []).map((change) => {
+    const line =
+      typeof change === 'object' &&
+      change !== null &&
+      typeof (change as Record<string, unknown>)['line'] === 'number'
+        ? ((change as Record<string, unknown>)['line'] as number)
+        : 1;
+    return {
+      severity: 'convention',
+      cop_name: 'DocScribe/MissingDocumentation',
+      message: 'Missing YARD documentation',
+      corrected: false,
+      correctable: true,
+      location: {
+        start_line: line,
+        start_column: 1,
+        last_line: line,
+        last_column: 1,
+      },
+    };
+  });
+  return JSON.stringify({
+    files: [{ path: filePath, offenses }],
+    summary: {
+      offense_count: offenses.length,
+      target_file_count: 1,
+      inspected_file_count: 1,
+      error_count: 0,
+    },
+  });
 }
 
+/**
+ * Run a single-file check through the daemon.
+ *
+ * @param filePath - Absolute path of the file to check (dry-run).
+ * @returns The CLI `--format json`-shaped output as a string.
+ */
+export async function checkFileViaServer(filePath: string): Promise<string> {
+  const result = (await sendRequest('check', { file: filePath })) as Record<string, unknown>;
+  return changesToCheckJson(filePath, result?.['changes']);
+}
+
+/**
+ * Fix a file contents through the daemon.
+ *
+ * The daemon `fix` RPC accepts `{ file, strategy }` and writes the result
+ * to disk. The extension works with unsaved editor contents, so the code
+ * is staged in a temp file first and read back after the RPC.
+ *
+ * @param code - Current editor contents (possibly unsaved).
+ * @param mode - Fix strategy (`safe` or `aggressive`).
+ * @returns The fixed code, or the original input when nothing changed.
+ */
 export async function applyFixViaServer(
   code: string,
   mode: 'safe' | 'aggressive',
-  useRbs: boolean,
 ): Promise<string> {
-  const result = await sendRequest('fix', [{ code, mode, rbs: useRbs }]);
-  return result as string;
+  const tmp = path.join(
+    os.tmpdir(),
+    `docscribe-fix-${Date.now()}-${Math.random().toString(36).slice(2)}.rb`,
+  );
+  fs.writeFileSync(tmp, code);
+  try {
+    const result = (await sendRequest('fix', { file: tmp, strategy: mode })) as Record<
+      string,
+      unknown
+    >;
+    if (result?.['changed']) {
+      return fs.readFileSync(tmp, 'utf8');
+    }
+    return code;
+  } finally {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // ignore
+    }
+  }
 }
 
+/**
+ * Whether server mode is usable for a project (starts the daemon if needed).
+ *
+ * @param projectRoot - Working directory (project root) for the daemon.
+ * @returns `true` if the daemon answers `ping`.
+ */
 export async function checkServerCapability(projectRoot: string): Promise<boolean> {
   const running = await ensureServerRunning(projectRoot);
   if (!running) return false;

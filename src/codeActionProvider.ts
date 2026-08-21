@@ -164,7 +164,7 @@ export async function applyFix(
     const serverRunning = await ensureServerRunning(root);
     if (serverRunning) {
       try {
-        fixedCode = await applyFixViaServer(code, mode, useRbs);
+        fixedCode = await applyFixViaServer(code, mode);
       } catch {
         // fallback to CLI
       }

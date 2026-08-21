@@ -278,4 +278,48 @@ suite('docscribeClient', () => {
       assert.strictEqual(parsed.files[0].path, '/tmp/c.rb');
     });
   });
+
+  suite('doctor', () => {
+    test('socket exists and pid alive — doctor would show exists: yes, alive: yes', () => {
+      const sock = path.join(os.tmpdir(), `ds-doctor-${Date.now()}.sock`);
+      const pidFile = pidPath(sock);
+      try {
+        fs.writeFileSync(sock, '');
+        fs.writeFileSync(pidFile, `${process.pid}`);
+        assert.strictEqual(fs.existsSync(sock), true);
+        assert.strictEqual(readPid(sock), process.pid);
+        assert.strictEqual(isProcessAlive(process.pid), true);
+        const exists = fs.existsSync(sock) ? 'yes' : 'no';
+        const pid = readPid(sock);
+        const alive = pid !== null && isProcessAlive(pid) ? 'yes' : 'no';
+        assert.strictEqual(exists, 'yes');
+        assert.strictEqual(pid, process.pid);
+        assert.strictEqual(alive, 'yes');
+      } finally {
+        cleanSocketFiles(sock);
+      }
+    });
+
+    test('locale — doctor shows LANG and LC_ALL, with unset handling', () => {
+      const savedLang = process.env.LANG;
+      const savedLc = process.env.LC_ALL;
+      try {
+        delete process.env.LANG;
+        delete process.env.LC_ALL;
+        const lang = process.env.LANG || '(unset)';
+        const lcAll = process.env.LC_ALL || '(unset)';
+        const localeNote = !(process.env.LANG || '').trim() ? ' → plugin will use en_US.UTF-8' : '';
+        assert.strictEqual(lang, '(unset)');
+        assert.strictEqual(lcAll, '(unset)');
+        assert.ok(localeNote.includes('en_US.UTF-8'));
+        const env = localeEnv();
+        assert.strictEqual(env.LANG, 'en_US.UTF-8');
+      } finally {
+        if (savedLang !== undefined) process.env.LANG = savedLang;
+        else delete process.env.LANG;
+        if (savedLc !== undefined) process.env.LC_ALL = savedLc;
+        else delete process.env.LC_ALL;
+      }
+    });
+  });
 });

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import {
   runDocscribe,
   findProjectRoot,
@@ -14,7 +15,14 @@ import { execFile } from './execAsync';
 import { createDiagnosticProvider, checkDocument } from './diagnosticProvider';
 import { DocscribeCodeActionProvider, applyFix } from './codeActionProvider';
 import { DocscribeFoldingRangeProvider, getCommentBlockStartLines } from './foldingProvider';
-import { ensureServerRunning, stopServer, checkBatchViaServer } from './docscribeClient';
+import {
+  ensureServerRunning,
+  stopServer,
+  checkBatchViaServer,
+  getSocketPath,
+  readPid,
+  isProcessAlive,
+} from './docscribeClient';
 
 let outputChannel: vscode.OutputChannel;
 let statusBarItem: vscode.StatusBarItem;
@@ -393,6 +401,27 @@ export function activate(context: vscode.ExtensionContext) {
               ? ' (disabled in settings)'
               : '';
           channel.appendLine(`  Backend: ${backend}${reason}`);
+          // Server socket / PID / locale diagnostics (feat/doctor-server-details)
+          const sock = getSocketPath();
+          if (sock) {
+            const exists = fs.existsSync(sock);
+            channel.appendLine(`  Socket: ${sock} (exists: ${exists ? 'yes' : 'no'})`);
+            const pid = readPid(sock);
+            if (pid !== null) {
+              const alive = isProcessAlive(pid);
+              channel.appendLine(`  Daemon PID: ${pid} (alive: ${alive ? 'yes' : 'no'})`);
+            } else {
+              channel.appendLine('  Daemon PID: not found (.pid missing)');
+            }
+          } else {
+            channel.appendLine('  Socket: not determined (daemon not started yet)');
+            channel.appendLine('  Daemon PID: unknown');
+          }
+          const lang = process.env.LANG || '(unset)';
+          const lcAll = process.env.LC_ALL || '(unset)';
+          const localeNote =
+            !process.env.LANG || !process.env.LANG.trim() ? ' → plugin will use en_US.UTF-8' : '';
+          channel.appendLine(`  Locale: LANG=${lang} LC_ALL=${lcAll}${localeNote}`);
         } else {
           channel.appendLine('DocScribe version: Not detected');
           channel.appendLine('');

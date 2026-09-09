@@ -138,6 +138,19 @@ The extension flags methods missing documentation and can auto-generate blocks l
 | `docscribe.ignorePatterns` | `[]`        | Glob patterns for files to skip (e.g. `**/vendor/**`) |
 | `docscribe.foldComments`   | `false`     | Auto-collapse YARD comment blocks on file open        |
 
+### Language-model tools (AI agents)
+
+The extension exposes six tools to Copilot-style agents via `languageModelTools`
+(`docscribe_check_file`, `docscribe_check_workspace`, `docscribe_safe_fix`,
+`docscribe_aggressive_fix`, `docscribe_update_types`, `docscribe_doctor`).
+They reuse the same check/fix/doctor paths as the commands — no new logic.
+
+### Localization
+
+Command titles, setting descriptions and tool metadata live in `package.nls.json`
+(English) with a Russian translation in `package.nls.ru.json`. VSCode picks the
+file matching the UI locale automatically.
+
 ## Development
 
 ### Prerequisites

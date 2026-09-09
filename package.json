@@ -1,7 +1,7 @@
 {
   "name": "docscribe-vscode",
   "displayName": "DocScribe",
-  "description": "Auto-generate inline YARD documentation for Ruby methods using docscribe",
+  "description": "%extension.description%",
   "version": "0.1.2",
   "publisher": "unurgunite",
   "license": "MIT",
@@ -15,7 +15,7 @@
   },
   "homepage": "https://github.com/FlorexLabs/docscribe-vscode#readme",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.90.0"
   },
   "categories": [
     "Linters",
@@ -37,35 +37,35 @@
     "commands": [
       {
         "command": "docscribe.checkFile",
-        "title": "DocScribe: Check current file"
+        "title": "%command.checkFile%"
       },
       {
         "command": "docscribe.checkWorkspace",
-        "title": "DocScribe: Check entire workspace"
+        "title": "%command.checkWorkspace%"
       },
       {
         "command": "docscribe.safeFix",
-        "title": "DocScribe: Apply safe fixes to current file"
+        "title": "%command.safeFix%"
       },
       {
         "command": "docscribe.aggressiveFix",
-        "title": "DocScribe: Apply aggressive fixes to current file"
+        "title": "%command.aggressiveFix%"
       },
       {
         "command": "docscribe.applyFix",
-        "title": "DocScribe: Apply fix"
+        "title": "%command.applyFix%"
       },
       {
         "command": "docscribe.toggleFoldComments",
-        "title": "DocScribe: Toggle fold YARD comments"
+        "title": "%command.toggleFoldComments%"
       },
       {
         "command": "docscribe.updateTypes",
-        "title": "DocScribe: Update types from RBS"
+        "title": "%command.updateTypes%"
       },
       {
         "command": "docscribe.doctor",
-        "title": "DocScribe: Doctor — environment diagnostics"
+        "title": "%command.doctor%"
       }
     ],
     "keybindings": [
@@ -124,33 +124,127 @@
         }
       ]
     },
+    "languageModelTools": [
+      {
+        "name": "docscribe_check_file",
+        "displayName": "%lm.checkFile.displayName%",
+        "modelDescription": "%lm.checkFile.description%",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "Absolute path to the Ruby file to check"
+            }
+          },
+          "required": [
+            "filePath"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "docscribe_check_workspace",
+        "displayName": "%lm.checkWorkspace.displayName%",
+        "modelDescription": "%lm.checkWorkspace.description%",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "docscribe_safe_fix",
+        "displayName": "%lm.safeFix.displayName%",
+        "modelDescription": "%lm.safeFix.description%",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "Absolute path to the Ruby file to fix"
+            }
+          },
+          "required": [
+            "filePath"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "docscribe_aggressive_fix",
+        "displayName": "%lm.aggressiveFix.displayName%",
+        "modelDescription": "%lm.aggressiveFix.description%",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "Absolute path to the Ruby file to fix"
+            }
+          },
+          "required": [
+            "filePath"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "docscribe_update_types",
+        "displayName": "%lm.updateTypes.displayName%",
+        "modelDescription": "%lm.updateTypes.description%",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "Absolute path to the Ruby file to update types for"
+            }
+          },
+          "required": [
+            "filePath"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "docscribe_doctor",
+        "displayName": "%lm.doctor.displayName%",
+        "modelDescription": "%lm.doctor.description%",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    ],
     "configuration": {
       "title": "DocScribe",
       "properties": {
         "docscribe.commandPath": {
           "type": "string",
           "default": "docscribe",
-          "description": "Path to the docscribe executable"
+          "description": "%config.commandPath%"
         },
         "docscribe.useBundleExec": {
           "type": "boolean",
           "default": true,
-          "description": "Use bundle exec to run docscribe"
+          "description": "%config.useBundleExec%"
         },
         "docscribe.runOnSave": {
           "type": "boolean",
           "default": true,
-          "description": "Run docscribe check automatically on file save and open"
+          "description": "%config.runOnSave%"
         },
         "docscribe.useRbs": {
           "type": "boolean",
           "default": true,
-          "description": "Use RBS signatures for @param/@return type inference"
+          "description": "%config.useRbs%"
         },
         "docscribe.validateTypes": {
           "type": "boolean",
           "default": true,
-          "description": "Validate YARD @param/@return types against RBS/inference (gem >= 1.6.2, passes --validate-types)"
+          "description": "%config.validateTypes%"
         },
         "docscribe.ignorePatterns": {
           "type": "array",
@@ -158,32 +252,32 @@
             "type": "string"
           },
           "default": [],
-          "description": "Glob patterns for files to ignore (e.g. **/vendor/**, **/spec/**)"
+          "description": "%config.ignorePatterns%"
         },
         "docscribe.foldComments": {
           "type": "boolean",
           "default": false,
-          "description": "Collapse YARD comment blocks by default when opening a file"
+          "description": "%config.foldComments%"
         },
         "docscribe.omitBoilerplate": {
           "type": "boolean",
           "default": false,
-          "description": "Omit boilerplate description text from generated YARD docs (passes -B to docscribe)"
+          "description": "%config.omitBoilerplate%"
         },
         "docscribe.rubyPath": {
           "type": "string",
           "default": "ruby",
-          "description": "Path to Ruby executable (default: ruby)"
+          "description": "%config.rubyPath%"
         },
         "docscribe.bundlePath": {
           "type": "string",
           "default": "bundle",
-          "description": "Path to Bundler executable (default: bundle)"
+          "description": "%config.bundlePath%"
         },
         "docscribe.useServer": {
           "type": "boolean",
           "default": true,
-          "description": "Use persistent docscribe server mode for faster checks (Unix socket)"
+          "description": "%config.useServer%"
         }
       }
     }

@@ -13,18 +13,12 @@ import {
   ensureRbsGemLine,
   type RunResult,
 } from './docscribeRunner';
-import { execFile } from './execAsync';
 import { createDiagnosticProvider, checkDocument } from './diagnosticProvider';
 import { DocscribeCodeActionProvider, applyFix } from './codeActionProvider';
 import { DocscribeFoldingRangeProvider, getCommentBlockStartLines } from './foldingProvider';
-import {
-  ensureServerRunning,
-  stopServer,
-  checkBatchViaServer,
-  getSocketPath,
-  readPid,
-  isProcessAlive,
-} from './docscribeClient';
+import { ensureServerRunning, stopServer, checkBatchViaServer } from './docscribeClient';
+import { buildDoctorReport } from './doctorReport';
+import { registerLmTools } from './lmTools';
 
 let outputChannel: vscode.OutputChannel;
 let statusBarItem: vscode.StatusBarItem;
@@ -420,95 +414,7 @@ export function activate(context: vscode.ExtensionContext) {
   const doctorCmd = vscode.commands.registerCommand('docscribe.doctor', async () => {
     const channel = vscode.window.createOutputChannel('DocScribe Doctor');
     channel.clear();
-    channel.appendLine('=== DocScribe Doctor ===');
-    channel.appendLine('');
-
-    try {
-      const rubyResult = await new Promise<string>((resolve) => {
-        execFile('ruby', ['--version'], (err: Error | null, stdout: string) => {
-          resolve(err ? 'Not found' : stdout.trim());
-        });
-      });
-      channel.appendLine(`Ruby: ${rubyResult}`);
-    } catch {
-      channel.appendLine('Ruby: Not found');
-    }
-
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (workspaceFolders) {
-      const rootPath = workspaceFolders[0].uri.fsPath;
-      const projectRoot = findProjectRoot(rootPath);
-      channel.appendLine(`Project root: ${projectRoot || 'Not found (no Gemfile)'}`);
-
-      if (projectRoot) {
-        const caps = await ensureFreshCapabilities(projectRoot);
-        if (caps) {
-          channel.appendLine(`DocScribe version: ${caps.version}`);
-          channel.appendLine(
-            `  Server mode: ${caps.hasServerMode ? 'Available' : 'Not available (requires >=1.5.1)'}`,
-          );
-          channel.appendLine(
-            `  Batch mode (check_batch): ${caps.hasBatchMode ? 'Available' : 'Not available (requires >=1.5.2)'}`,
-          );
-          channel.appendLine(
-            `  RBS collection: ${caps.hasRbsCollection ? 'Available' : 'Not available'}`,
-          );
-          channel.appendLine(
-            `  Exit code semantics: ${caps.hasExitCodeSemantics ? 'Available' : 'Not available'}`,
-          );
-          const useServer = vscode.workspace
-            .getConfiguration('docscribe')
-            .get<boolean>('useServer', true);
-          const backend = useServer && caps.hasServerMode ? 'server' : 'CLI';
-          const reason = !caps.hasServerMode
-            ? ' (fallback — gem <1.5.1)'
-            : !useServer
-              ? ' (disabled in settings)'
-              : '';
-          channel.appendLine(`  Backend: ${backend}${reason}`);
-          // Server socket / PID / locale diagnostics (feat/doctor-server-details)
-          const sock = getSocketPath();
-          if (sock) {
-            const exists = fs.existsSync(sock);
-            channel.appendLine(`  Socket: ${sock} (exists: ${exists ? 'yes' : 'no'})`);
-            const pid = readPid(sock);
-            if (pid !== null) {
-              const alive = isProcessAlive(pid);
-              channel.appendLine(`  Daemon PID: ${pid} (alive: ${alive ? 'yes' : 'no'})`);
-            } else {
-              channel.appendLine('  Daemon PID: not found (.pid missing)');
-            }
-          } else {
-            channel.appendLine('  Socket: not determined (daemon not started yet)');
-            channel.appendLine('  Daemon PID: unknown');
-          }
-          const lang = process.env.LANG || '(unset)';
-          const lcAll = process.env.LC_ALL || '(unset)';
-          const localeNote =
-            !process.env.LANG || !process.env.LANG.trim() ? ' → plugin will use en_US.UTF-8' : '';
-          channel.appendLine(`  Locale: LANG=${lang} LC_ALL=${lcAll}${localeNote}`);
-        } else {
-          channel.appendLine('DocScribe version: Not detected');
-          channel.appendLine('');
-          channel.appendLine('Troubleshooting:');
-          channel.appendLine('  1. Ensure docscribe gem is installed: gem list docscribe');
-          channel.appendLine('  2. Add to Gemfile: gem "docscribe"');
-          channel.appendLine('  3. Run: bundle install');
-        }
-      }
-    }
-
-    const config = vscode.workspace.getConfiguration('docscribe');
-    channel.appendLine('');
-    channel.appendLine('Settings:');
-    channel.appendLine(`  runOnSave: ${config.get('runOnSave')}`);
-    channel.appendLine(`  useBundleExec: ${config.get('useBundleExec')}`);
-    channel.appendLine(`  useRbs: ${config.get('useRbs')}`);
-    channel.appendLine(`  commandPath: ${config.get('commandPath')}`);
-    channel.appendLine(`  ignorePatterns: ${JSON.stringify(config.get('ignorePatterns'))}`);
-    channel.appendLine(`  foldComments: ${config.get('foldComments')}`);
-    channel.appendLine(`  omitBoilerplate: ${config.get('omitBoilerplate')}`);
-
+    channel.appendLine(await buildDoctorReport());
     channel.show();
   });
 
@@ -527,6 +433,9 @@ export function activate(context: vscode.ExtensionContext) {
     updateTypesForFileCmd,
     doctorCmd,
   );
+
+  // Language-model tools for AI agents (card 469).
+  registerLmTools(context);
 }
 
 export function deactivate(): void {

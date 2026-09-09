@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.3] — TBD
+
+### Features
+
+- **RBS auto-detect** — port of RubyMine `RbsDetector`: explicit `docscribe.yml` `rbs.enabled` wins, then `sig/` RBS files, `Gemfile.lock`, `Gemfile`; `rbsHash` for invalidation
+- **Daemon `cli_overrides`** — forward `rbs` / `rbs_collection` / `validate_types` in `check`, `check_batch` and `fix` RPC calls
+- **`docscribe.validateTypes`** — new setting (default `true`); passes `--validate-types` / `--no-validate-types` (gem >= 1.6.2); `Docscribe/InvalidType` maps to Warning
+- **Capability gates for 1.6.2** — `hasValidateTypes` / `hasUpdateTypesRpc`; one-time upgrade warning below 1.6.2; capabilities re-probed when `Gemfile.lock` changes mid-session
+
+### Fixed
+
+- CLI parity with RubyMine: `--rbs` (+ `--rbs-collection` when the lock exists); `safe` strategy uses aggressive flags when RBS is on (RBS types only update in aggressive mode)
+
 ## [0.1.2] — TBD
 
 ### Features

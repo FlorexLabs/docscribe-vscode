@@ -1,7 +1,6 @@
-import * as path from 'path';
 import * as vscode from 'vscode';
 import { execFile } from 'child_process';
-import { findProjectRoot, gemfileHasRbs } from './docscribeRunner';
+import { findProjectRoot, getCachedCapabilities, resolveRbsContext } from './docscribeRunner';
 import { ensureServerRunning, applyFixViaServer } from './docscribeClient';
 
 interface DiffHunk {
@@ -154,8 +153,7 @@ export async function applyFix(
   const useBundleExec = config.get<boolean>('useBundleExec', true);
   const commandPath = config.get<string>('commandPath', 'docscribe');
   const bundlePath = config.get<string>('bundlePath', 'bundle');
-  const rbsEnabled = config.get<boolean>('useRbs', false);
-  const useRbs = rbsEnabled && gemfileHasRbs(path.join(root, 'Gemfile'));
+  const rbs = resolveRbsContext(root, getCachedCapabilities());
 
   let fixedCode: string | null = null;
 
@@ -164,7 +162,7 @@ export async function applyFix(
     const serverRunning = await ensureServerRunning(root);
     if (serverRunning) {
       try {
-        fixedCode = await applyFixViaServer(code, mode);
+        fixedCode = await applyFixViaServer(code, mode, rbs.overrides);
       } catch {
         // fallback to CLI
       }
@@ -172,14 +170,24 @@ export async function applyFix(
   }
 
   if (fixedCode === null) {
-    const fixFlags = mode === 'aggressive' ? ['-A', '-k'] : ['-a'];
+    // RBS types only update in aggressive mode — mirror RubyMine CLI parity
+    const fixFlags =
+      mode === 'aggressive' || (mode === 'safe' && rbs.useRbs) ? ['-A', '-k'] : ['-a'];
     const omitBoilerplate = config.get<boolean>('omitBoilerplate', false);
     if (omitBoilerplate) fixFlags.push('-B');
 
+    const rbsFlags = rbs.useRbs ? ['--rbs', ...(rbs.collection ? ['--rbs-collection'] : [])] : [];
+    const validateFlags =
+      rbs.validateTypes === true
+        ? ['--validate-types']
+        : rbs.validateTypes === false
+          ? ['--no-validate-types']
+          : [];
+
     const cmd = useBundleExec ? bundlePath : commandPath;
     const cmdArgs = useBundleExec
-      ? ['exec', commandPath, ...fixFlags, '--stdin', ...(useRbs ? ['--rbs-collection'] : [])]
-      : [...fixFlags, '--stdin', ...(useRbs ? ['--rbs-collection'] : [])];
+      ? ['exec', commandPath, ...fixFlags, '--stdin', ...rbsFlags, ...validateFlags]
+      : [...fixFlags, '--stdin', ...rbsFlags, ...validateFlags];
 
     const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>(
       (resolve) => {

@@ -9,6 +9,8 @@ import {
   collectWorkspaceFiles,
   chunkArray,
   resolveRbsContext,
+  gemfileHasRbs,
+  ensureRbsGemLine,
   type RunResult,
 } from './docscribeRunner';
 import { execFile } from './execAsync';
@@ -28,6 +30,7 @@ let outputChannel: vscode.OutputChannel;
 let statusBarItem: vscode.StatusBarItem;
 let gemChecked = false;
 let gemInstalled = true;
+let rbsBalloonShown = false;
 
 export function updateStatusBar(result: RunResult | null): void {
   if (!result) {
@@ -116,8 +119,49 @@ export function activate(context: vscode.ExtensionContext) {
               vscode.commands.executeCommand('vscode.open', vscode.Uri.file(gemfilePath));
             }
           });
+      } else {
+        checkMissingRbsGem(workspaceRoot);
       }
     });
+  }
+
+  // Missing-`rbs` balloon (card 466): `useRbs` on but no `rbs` gem —
+  // unlike the docscribe-missing balloon this one is opt-in UX noise,
+  // so it shows once per session and offers a one-click Gemfile fix.
+  function checkMissingRbsGem(workspaceRoot: string): void {
+    if (rbsBalloonShown) return;
+    const config = vscode.workspace.getConfiguration('docscribe');
+    if (!config.get<boolean>('useRbs', false)) return;
+    const projectRoot = findProjectRoot(workspaceRoot) ?? workspaceRoot;
+    const gemfilePath = path.join(projectRoot, 'Gemfile');
+    if (gemfileHasRbs(gemfilePath)) return;
+    rbsBalloonShown = true;
+    vscode.window
+      .showWarningMessage(
+        'DocScribe: RBS type inference is enabled but the `rbs` gem is missing.',
+        'Add rbs to Gemfile',
+      )
+      .then((selection) => {
+        if (selection !== 'Add rbs to Gemfile') return;
+        let content: string;
+        try {
+          content = fs.readFileSync(gemfilePath, 'utf8');
+        } catch {
+          vscode.window.showErrorMessage('DocScribe: cannot read Gemfile');
+          return;
+        }
+        const updated = ensureRbsGemLine(content);
+        if (updated === null) return;
+        try {
+          fs.writeFileSync(gemfilePath, updated);
+        } catch {
+          vscode.window.showErrorMessage('DocScribe: cannot write Gemfile');
+          return;
+        }
+        vscode.window.showInformationMessage(
+          'DocScribe: `gem "rbs"` added to Gemfile. Run `bundle install` to apply.',
+        );
+      });
   }
 
   function ensureGemInstalled(): boolean {

@@ -15,6 +15,8 @@
 - **File-scoped Update Types via daemon** — single-file `update_types` goes through the `update_types` RPC (`{ file }` → `{ status, dir, exit_code }`, gem >= 1.6.2) with CLI fallback; workspace scope stays on CLI; open documents refresh afterwards
 - **Fix source routing in QuickFix** — daemon `changes[].source` (`rbs` | `infer` | `syntax`) threaded through adapters, parser and diagnostics; RBS-sourced lightbulb offers Update Types, others offer direct fix
 - **Batch per-file errors surfaced** — `check_batch` `error` results become `Docscribe/Error` diagnostics instead of silent `error_count`
+- **Workspace file filter sync** — `collectWorkspaceFiles` honors `docscribe.yml` `filter.files` (exclude wins, empty include = all, fallback `exclude: ['spec']`) and root `.gitignore` (with `!` negations); fixed `excludeDirs` stays as safety net
+- **Missing-RBS balloon** — with `docscribe.useRbs` on and no `rbs` gem, a once-per-session warning offers one-click `gem "rbs"` append to the Gemfile
 
 ## [0.1.2] — TBD
 

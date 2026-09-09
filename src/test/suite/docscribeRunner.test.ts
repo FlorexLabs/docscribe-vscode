@@ -177,11 +177,23 @@ suite('docscribeRunner', () => {
       assert.strictEqual(caps.hasBatchMode, true);
     });
 
-    test('parses 1.6.1 — server and batch', () => {
+    test('parses 1.6.1 — server and batch, no 1.6.2 features', () => {
       const caps = parseCapabilities('1.6.1');
       if (!caps) throw new Error('expected caps');
       assert.strictEqual(caps.hasServerMode, true);
       assert.strictEqual(caps.hasBatchMode, true);
+      assert.strictEqual(caps.hasValidateTypes, false);
+      assert.strictEqual(caps.hasUpdateTypesRpc, false);
+    });
+
+    test('parses 1.6.2 — validate-types and update_types RPC', () => {
+      const caps = parseCapabilities('1.6.2');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.version, '1.6.2');
+      assert.strictEqual(caps.hasServerMode, true);
+      assert.strictEqual(caps.hasBatchMode, true);
+      assert.strictEqual(caps.hasValidateTypes, true);
+      assert.strictEqual(caps.hasUpdateTypesRpc, true);
     });
 
     test('parses 2.0.0 — server and batch', () => {

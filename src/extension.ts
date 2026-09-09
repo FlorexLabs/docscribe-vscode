@@ -4,11 +4,11 @@ import * as fs from 'fs';
 import {
   runDocscribe,
   findProjectRoot,
-  detectCapabilities,
-  getCachedCapabilities,
+  ensureFreshCapabilities,
   checkGemInstalled,
   collectWorkspaceFiles,
   chunkArray,
+  resolveRbsContext,
   type RunResult,
 } from './docscribeRunner';
 import { execFile } from './execAsync';
@@ -86,14 +86,9 @@ export function activate(context: vscode.ExtensionContext) {
   if (workspaceFolders && workspaceFolders.length > 0) {
     const root = findProjectRoot(workspaceFolders[0].uri.fsPath);
     if (root) {
-      const cached = getCachedCapabilities();
-      if (cached) {
-        if (cached.hasServerMode) ensureServerRunning(root);
-      } else {
-        detectCapabilities(root).then((caps) => {
-          if (caps?.hasServerMode) ensureServerRunning(root);
-        });
-      }
+      ensureFreshCapabilities(root).then((caps) => {
+        if (caps?.hasServerMode) ensureServerRunning(root);
+      });
     }
   }
 
@@ -164,7 +159,7 @@ export function activate(context: vscode.ExtensionContext) {
             if (folders && folders.length > 0) {
               const projectRoot = findProjectRoot(folders[0].uri.fsPath);
               if (projectRoot) {
-                const caps = getCachedCapabilities() || (await detectCapabilities(projectRoot));
+                const caps = await ensureFreshCapabilities(projectRoot);
                 const useServer = vscode.workspace
                   .getConfiguration('docscribe')
                   .get<boolean>('useServer', true);
@@ -193,6 +188,7 @@ export function activate(context: vscode.ExtensionContext) {
                       } as RunResult;
                     }
                     const chunks = chunkArray(allFiles, 32);
+                    const rbs = resolveRbsContext(projectRoot, caps);
                     let totalOffense = 0;
                     let totalTarget = 0;
                     let totalInspected = 0;
@@ -206,7 +202,7 @@ export function activate(context: vscode.ExtensionContext) {
                         increment: (1 / chunks.length) * 100,
                       });
                       try {
-                        const json = await checkBatchViaServer(chunk);
+                        const json = await checkBatchViaServer(chunk, rbs.overrides);
                         const parsed = JSON.parse(json) as {
                           files: unknown[];
                           summary: {
@@ -376,7 +372,7 @@ export function activate(context: vscode.ExtensionContext) {
       channel.appendLine(`Project root: ${projectRoot || 'Not found (no Gemfile)'}`);
 
       if (projectRoot) {
-        const caps = getCachedCapabilities() || (await detectCapabilities(projectRoot));
+        const caps = await ensureFreshCapabilities(projectRoot);
         if (caps) {
           channel.appendLine(`DocScribe version: ${caps.version}`);
           channel.appendLine(

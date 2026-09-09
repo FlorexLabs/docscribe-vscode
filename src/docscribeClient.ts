@@ -473,13 +473,28 @@ export function batchResultsToJson(results: unknown): string {
 }
 
 /**
+ * CLI overrides forwarded to the daemon (`params['cli_overrides']`).
+ *
+ * Supported keys (gem `CLI_OVERRIDE_KEYS`): `rbs`, `rbs_collection`,
+ * `validate_types` (plus `keep_descriptions`, `no_boilerplate`, ...).
+ * The gem drops `false`/`nil`/empty values — only send `true` flags.
+ */
+export type CliOverrides = Record<string, boolean>;
+
+/**
  * Run a multi-file check through the daemon (`check_batch`).
  *
  * @param files - Absolute paths of files to check.
+ * @param cliOverrides - Optional RBS/validate overrides for the daemon.
  * @returns The CLI `--format json`-shaped output as a string.
  */
-export async function checkBatchViaServer(files: string[]): Promise<string> {
-  const result = (await sendRequest('check_batch', { files })) as Record<string, unknown>;
+export async function checkBatchViaServer(
+  files: string[],
+  cliOverrides?: CliOverrides,
+): Promise<string> {
+  const params: Record<string, unknown> = { files };
+  if (cliOverrides) params['cli_overrides'] = cliOverrides;
+  const result = (await sendRequest('check_batch', params)) as Record<string, unknown>;
   const results = result?.['results'];
   return batchResultsToJson(results);
 }
@@ -488,10 +503,16 @@ export async function checkBatchViaServer(files: string[]): Promise<string> {
  * Run a single-file check through the daemon.
  *
  * @param filePath - Absolute path of the file to check (dry-run).
+ * @param cliOverrides - Optional RBS/validate overrides for the daemon.
  * @returns The CLI `--format json`-shaped output as a string.
  */
-export async function checkFileViaServer(filePath: string): Promise<string> {
-  const result = (await sendRequest('check', { file: filePath })) as Record<string, unknown>;
+export async function checkFileViaServer(
+  filePath: string,
+  cliOverrides?: CliOverrides,
+): Promise<string> {
+  const params: Record<string, unknown> = { file: filePath };
+  if (cliOverrides) params['cli_overrides'] = cliOverrides;
+  const result = (await sendRequest('check', params)) as Record<string, unknown>;
   return changesToCheckJson(filePath, result?.['changes']);
 }
 
@@ -504,11 +525,13 @@ export async function checkFileViaServer(filePath: string): Promise<string> {
  *
  * @param code - Current editor contents (possibly unsaved).
  * @param mode - Fix strategy (`safe` or `aggressive`).
+ * @param cliOverrides - Optional RBS/validate overrides for the daemon.
  * @returns The fixed code, or the original input when nothing changed.
  */
 export async function applyFixViaServer(
   code: string,
   mode: 'safe' | 'aggressive',
+  cliOverrides?: CliOverrides,
 ): Promise<string> {
   const tmp = path.join(
     os.tmpdir(),
@@ -516,10 +539,9 @@ export async function applyFixViaServer(
   );
   fs.writeFileSync(tmp, code);
   try {
-    const result = (await sendRequest('fix', { file: tmp, strategy: mode })) as Record<
-      string,
-      unknown
-    >;
+    const params: Record<string, unknown> = { file: tmp, strategy: mode };
+    if (cliOverrides) params['cli_overrides'] = cliOverrides;
+    const result = (await sendRequest('fix', params)) as Record<string, unknown>;
     if (result?.['changed']) {
       return fs.readFileSync(tmp, 'utf8');
     }

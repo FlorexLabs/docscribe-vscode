@@ -2,7 +2,13 @@ import * as vscode from 'vscode';
 import * as proc from './execAsync';
 import * as path from 'path';
 import * as fs from 'fs';
-import { ensureServerRunning, checkFileViaServer } from './docscribeClient';
+import { ensureServerRunning, checkFileViaServer, type CliOverrides } from './docscribeClient';
+import {
+  gemfileHasRbs as gemfileListsRbs,
+  shouldUseRbs,
+  hasCollection,
+  buildRbsCliOverrides,
+} from './rbsDetector';
 
 let docscribeLog: vscode.OutputChannel | undefined;
 
@@ -95,18 +101,15 @@ export function findProjectRoot(startPath: string): string | null {
  * Checks whether a project's Gemfile lists the `rbs` gem.
  *
  * Reads the file synchronously and tests for a line matching
- * `gem "rbs"` or `gem 'rbs'`.
+ * `gem "rbs"` or `gem 'rbs'`. Kept for backwards compatibility;
+ * new code should use {@link shouldUseRbs} from `rbsDetector`
+ * (which also checks `sig/`, `Gemfile.lock` and `docscribe.yml`).
  *
  * @param gemfilePath - Absolute path to the Gemfile.
  * @returns `true` if `gem "rbs"` is found, `false` otherwise or on read error.
  */
 export function gemfileHasRbs(gemfilePath: string): boolean {
-  try {
-    const content = fs.readFileSync(gemfilePath, 'utf8');
-    return /gem\s+['"]rbs['"]/.test(content);
-  } catch {
-    return false;
-  }
+  return gemfileListsRbs(gemfilePath);
 }
 
 /**
@@ -199,9 +202,14 @@ export interface Capabilities {
   hasBatchMode: boolean;
   hasRbsCollection: boolean;
   hasExitCodeSemantics: boolean;
+  /** `--validate-types` / `Docscribe/InvalidType` (gem >= 1.6.2). */
+  hasValidateTypes: boolean;
+  /** `update_types` daemon RPC + `changes[].source` (gem >= 1.6.2). */
+  hasUpdateTypesRpc: boolean;
 }
 
 let cachedCapabilities: Capabilities | null = null;
+const capabilitiesLockMtime = new Map<string, number>();
 
 export function getCachedCapabilities(): Capabilities | null {
   return cachedCapabilities;
@@ -209,6 +217,15 @@ export function getCachedCapabilities(): Capabilities | null {
 
 export function clearCachedCapabilitiesForTesting(): void {
   cachedCapabilities = null;
+  capabilitiesLockMtime.clear();
+}
+
+function gemfileLockMtime(projectRoot: string): number | null {
+  try {
+    return fs.statSync(path.join(projectRoot, 'Gemfile.lock')).mtimeMs;
+  } catch {
+    return null;
+  }
 }
 
 let serverModeWarningShown = false;
@@ -230,10 +247,37 @@ export async function detectCapabilities(projectRoot: string): Promise<Capabilit
     if (!result.success) return null;
     const version = result.stdout.trim();
     cachedCapabilities = parseCapabilities(version);
+    const lockMtime = gemfileLockMtime(projectRoot);
+    if (lockMtime !== null) capabilitiesLockMtime.set(projectRoot, lockMtime);
     return cachedCapabilities;
   } catch {
     return null;
   }
+}
+
+/**
+ * Cached capabilities, re-probed when `Gemfile.lock` changed.
+ *
+ * Mirrors RubyMine `performGemCheck` mtime guard: a `bundle update`
+ * mid-session must not leave a stale version gate behind.
+ *
+ * @param projectRoot - Absolute project root.
+ * @returns Fresh or cached capabilities, `null` when undetectable.
+ */
+export async function ensureFreshCapabilities(projectRoot: string): Promise<Capabilities | null> {
+  const lockMtime = gemfileLockMtime(projectRoot);
+  const recorded = capabilitiesLockMtime.get(projectRoot);
+  if (
+    cachedCapabilities &&
+    lockMtime !== null &&
+    recorded !== undefined &&
+    lockMtime !== recorded
+  ) {
+    cachedCapabilities = null;
+    serverModeWarningShown = false;
+  }
+  if (cachedCapabilities) return cachedCapabilities;
+  return detectCapabilities(projectRoot);
 }
 
 export function parseCapabilities(version: string): Capabilities | null {
@@ -246,13 +290,58 @@ export function parseCapabilities(version: string): Capabilities | null {
     major > tMajor ||
     (major === tMajor && minor > tMinor) ||
     (major === tMajor && minor === tMinor && patch >= tPatch);
-  // Server mode introduced in 1.5.1, batch mode (check_batch) in 1.5.2
+  // Server mode introduced in 1.5.1, batch mode (check_batch) in 1.5.2,
+  // validate-types + update_types RPC + change source in 1.6.2.
   return {
     version: `${major}.${minor}.${patch}`,
     hasServerMode: atLeast(1, 5, 1),
     hasBatchMode: atLeast(1, 5, 2),
     hasRbsCollection: atLeast(1, 4, 0),
     hasExitCodeSemantics: atLeast(1, 5, 0),
+    hasValidateTypes: atLeast(1, 6, 2),
+    hasUpdateTypesRpc: atLeast(1, 6, 2),
+  };
+}
+
+/**
+ * Resolved RBS/validate context for a project.
+ */
+export interface RbsContext {
+  /** Effective RBS flag (setting AND auto-detect). */
+  useRbs: boolean;
+  /** Whether `rbs_collection.lock.yaml` exists. */
+  collection: boolean;
+  /**
+   * Effective validate flag, or `undefined` when the gem version is
+   * unknown (callers must omit the CLI flag then — old gems reject it).
+   */
+  validateTypes: boolean | undefined;
+  /** Daemon `cli_overrides` (undefined when empty). */
+  overrides: CliOverrides | undefined;
+}
+
+/**
+ * Resolve RBS/validate settings + auto-detect for a project.
+ *
+ * Single choke point used by the check path, the fix path and the
+ * workspace batch path so CLI flags and daemon overrides stay in sync.
+ *
+ * @param projectRoot - Absolute project root.
+ * @param caps - Detected capabilities (`null` when version unknown).
+ */
+export function resolveRbsContext(projectRoot: string, caps: Capabilities | null): RbsContext {
+  const config = vscode.workspace.getConfiguration('docscribe');
+  const rbsEnabled = config.get<boolean>('useRbs', false);
+  const useRbs =
+    rbsEnabled && shouldUseRbs(projectRoot, gemfileHasRbs(path.join(projectRoot, 'Gemfile')));
+  const collection = hasCollection(projectRoot);
+  const validateTypesEnabled = config.get<boolean>('validateTypes', true);
+  const validateTypes = caps ? validateTypesEnabled && caps.hasValidateTypes : undefined;
+  return {
+    useRbs,
+    collection,
+    validateTypes,
+    overrides: buildRbsCliOverrides(useRbs, collection, validateTypes === true),
   };
 }
 
@@ -269,9 +358,12 @@ export function parseCapabilities(version: string): Capabilities | null {
  *
  * @param strategy - Fixing strategy (`check`, `safe`, `aggressive`).
  * @param json - If true, adds `--format json` (for check mode).
- * @param useRbs - Whether to pass `--rbs-collection`.
+ * @param useRbs - Whether to pass `--rbs` (+ `--rbs-collection` when available).
  * @param omitBoilerplate - Whether to pass `-B` to omit boilerplate text.
  * @param filePath - Optional file path to pass as the last argument.
+ * @param validateTypes - Whether to pass `--validate-types` (`undefined` omits
+ *   the flag entirely — old gems reject unknown flags).
+ * @param hasCollection - Whether `rbs_collection.lock.yaml` exists.
  * @returns An array of CLI argument strings.
  */
 function getCommandArgs(
@@ -280,10 +372,14 @@ function getCommandArgs(
   useRbs: boolean,
   omitBoilerplate: boolean,
   filePath?: string,
+  validateTypes?: boolean,
+  hasCollection?: boolean,
 ): string[] {
   const args: string[] = [];
   if (strategy === 'safe') {
-    args.push('-a');
+    // RBS types only update in aggressive mode — mirror RubyMine CLI parity
+    if (useRbs) args.push('-A', '-k');
+    else args.push('-a');
   } else if (strategy === 'aggressive') {
     args.push('-A', '-k');
   } else if (strategy === 'updateTypes') {
@@ -293,8 +389,11 @@ function getCommandArgs(
     args.push('--format', 'json');
   }
   if (useRbs) {
-    args.push('--rbs-collection');
+    args.push('--rbs');
+    if (hasCollection) args.push('--rbs-collection');
   }
+  if (validateTypes === true) args.push('--validate-types');
+  else if (validateTypes === false) args.push('--no-validate-types');
   if (omitBoilerplate) {
     args.push('-B');
   }
@@ -441,21 +540,27 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
       } catch {
         // ignore
       }
+    } else if (caps.hasServerMode && !caps.hasValidateTypes && !serverModeWarningShown) {
+      serverModeWarningShown = true;
+      vscode.window.showWarningMessage(
+        `DocScribe ${caps.version} does not support validate-types and file-scoped update_types (requires >=1.6.2). Please upgrade: bundle update docscribe`,
+      );
     }
   }
 
   const config = vscode.workspace.getConfiguration('docscribe');
   const strategy = options.strategy || 'check';
   const json = options.json ?? true;
-  const rbsEnabled = config.get<boolean>('useRbs', false);
-  const useRbs = rbsEnabled && gemfileHasRbs(path.join(projectRoot, 'Gemfile'));
+  const rbs = resolveRbsContext(projectRoot, caps);
   const omitBoilerplate = config.get<boolean>('omitBoilerplate', false);
   const args = getCommandArgs(
     strategy,
     json,
-    useRbs,
+    rbs.useRbs,
     omitBoilerplate,
     options.workspace ? undefined : filePath,
+    rbs.validateTypes,
+    rbs.collection,
   );
 
   const useServer = config.get<boolean>('useServer', true);
@@ -464,7 +569,7 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
     try {
       const serverRunning = await ensureServerRunning(projectRoot);
       if (serverRunning) {
-        const result = await checkFileViaServer(filePath);
+        const result = await checkFileViaServer(filePath, rbs.overrides);
         const parsed = JSON.parse(result);
         const offenseCount = parsed?.summary?.offense_count || 0;
         return {

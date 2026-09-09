@@ -128,15 +128,15 @@ The extension flags methods missing documentation and can auto-generate blocks l
 
 ### Settings
 
-| Setting                    | Default     | Description                                           |
-|----------------------------|-------------|-------------------------------------------------------|
-| `docscribe.commandPath`    | `docscribe` | Path to the docscribe executable                      |
-| `docscribe.useBundleExec`  | `true`      | Use `bundle exec docscribe`                           |
-| `docscribe.runOnSave`      | `true`      | Check automatically on file save and open             |
-| `docscribe.useRbs`         | `true`      | Use RBS signatures for type inference when available  |
-| `docscribe.validateTypes`  | `true`      | Validate YARD types (`--validate-types`, gem >= 1.6.2)|
-| `docscribe.ignorePatterns` | `[]`        | Glob patterns for files to skip (e.g. `**/vendor/**`) |
-| `docscribe.foldComments`   | `false`     | Auto-collapse YARD comment blocks on file open        |
+| Setting                    | Default     | Description                                            |
+|----------------------------|-------------|--------------------------------------------------------|
+| `docscribe.commandPath`    | `docscribe` | Path to the docscribe executable                       |
+| `docscribe.useBundleExec`  | `true`      | Use `bundle exec docscribe`                            |
+| `docscribe.runOnSave`      | `true`      | Check automatically on file save and open              |
+| `docscribe.useRbs`         | `true`      | Use RBS signatures for type inference when available   |
+| `docscribe.validateTypes`  | `true`      | Validate YARD types (`--validate-types`, gem >= 1.6.2) |
+| `docscribe.ignorePatterns` | `[]`        | Glob patterns for files to skip (e.g. `**/vendor/**`)  |
+| `docscribe.foldComments`   | `false`     | Auto-collapse YARD comment blocks on file open         |
 
 ### Language-model tools (AI agents)
 

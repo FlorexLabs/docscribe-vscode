@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as proc from './execAsync';
 import * as path from 'path';
 import * as fs from 'fs';
+import { minimatch } from 'minimatch';
 import {
   ensureServerRunning,
   checkFileViaServer,
@@ -13,6 +14,7 @@ import {
   shouldUseRbs,
   hasCollection,
   buildRbsCliOverrides,
+  findDocscribeYml,
 } from './rbsDetector';
 
 let docscribeLog: vscode.OutputChannel | undefined;
@@ -118,13 +120,255 @@ export function gemfileHasRbs(gemfilePath: string): boolean {
 }
 
 /**
+ * Include/exclude file patterns (`filter.files` semantics).
+ */
+export interface FileFilterPatterns {
+  include: string[];
+  exclude: string[];
+}
+
+/**
+ * Normalize one raw pattern (mirror gem `normalize_file_patterns`):
+ * drop empties, expand `dir/` and existing-directory shorthands to `dir/**`.
+ *
+ * @param pattern - Raw pattern from config.
+ * @param projectRoot - Absolute project root (for directory probing).
+ * @returns Zero or more normalized patterns.
+ */
+export function normalizeFilePattern(pattern: string, projectRoot: string): string[] {
+  const pat = pattern.trim();
+  if (!pat) return [];
+  if (pat.endsWith('/')) return [`${pat}**/*`];
+  if (!/[*?\[{]/.test(pat)) {
+    try {
+      if (fs.statSync(path.join(projectRoot, pat)).isDirectory()) return [`${pat}/**/*`];
+    } catch {
+      // not a directory — keep as is
+    }
+  }
+  return [pat];
+}
+
+/**
+ * Match a relative file path against one filter pattern.
+ *
+ * Mirror gem `file_match_pattern?`: `/regex/` is a regexp, otherwise a
+ * glob (a recursive segment is also tried collapsed to one slash),
+ * dotfiles included.
+ *
+ * @param pattern - Normalized pattern.
+ * @param relPath - Project-relative path with `/` separators.
+ */
+export function matchFilePattern(pattern: string, relPath: string): boolean {
+  if (pattern.length >= 2 && pattern.startsWith('/') && pattern.endsWith('/')) {
+    try {
+      return new RegExp(pattern.slice(1, -1)).test(relPath);
+    } catch {
+      return false;
+    }
+  }
+  const candidates = [pattern];
+  if (pattern.includes('/**/')) candidates.push(pattern.replace(/\/\*\*\//g, '/'));
+  return candidates.some((c) => minimatch(relPath, c, { dot: true }));
+}
+
+/**
+ * Decide whether a file passes include/exclude patterns.
+ *
+ * Mirror gem `process_file?`: exclude wins; empty include means all.
+ *
+ * @param relPath - Project-relative path with `/` separators.
+ * @param include - Include patterns (empty = everything).
+ * @param exclude - Exclude patterns.
+ */
+export function processFileByFilter(
+  relPath: string,
+  include: string[],
+  exclude: string[],
+): boolean {
+  if (exclude.some((p) => matchFilePattern(p, relPath))) return false;
+  if (include.length === 0) return true;
+  return include.some((p) => matchFilePattern(p, relPath));
+}
+
+function stripYamlScalar(value: string): string {
+  let v = value.trim();
+  const hashIndex = v.search(/\s+#/);
+  if (hashIndex >= 0) v = v.slice(0, hashIndex).trim();
+  if (
+    v.length >= 2 &&
+    ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))
+  ) {
+    v = v.slice(1, -1);
+  }
+  return v;
+}
+
+function parseInlineList(value: string): string[] {
+  const inner = value.trim();
+  if (!inner.startsWith('[')) return [];
+  const body = inner.slice(1, inner.lastIndexOf(']'));
+  if (!body.trim()) return [];
+  return body
+    .split(',')
+    .map((item) => stripYamlScalar(item))
+    .filter((item) => item.length > 0);
+}
+
+/**
+ * Parse `filter.files.include/exclude` from a docscribe.yml text.
+ *
+ * Supports inline (`include: [a, b]`) and dash-list forms under
+ * `filter:` → `files:`. Anything else is ignored (tolerant subset).
+ *
+ * @param yml - Raw config text.
+ * @param projectRoot - Absolute project root (for shorthand probing).
+ */
+export function parseFilterFilesSection(yml: string, projectRoot: string): FileFilterPatterns {
+  const include: string[] = [];
+  const exclude: string[] = [];
+  const lines = yml.split('\n');
+  let inFilter = false;
+  let filterIndent = -1;
+  let inFiles = false;
+  let filesIndent = -1;
+  let current: string[] | null = null;
+  let currentIndent = -1;
+
+  const indentOf = (line: string): number => line.length - line.trimStart().length;
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\t/g, '  ');
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const indent = indentOf(line);
+
+    if (/^filter\s*:\s*$/.test(trimmed) && indent === 0) {
+      inFilter = true;
+      filterIndent = 0;
+      inFiles = false;
+      current = null;
+      continue;
+    }
+    if (!inFilter) continue;
+    if (indent <= filterIndent && !/^filter\s*:/.test(trimmed)) {
+      inFilter = false;
+      inFiles = false;
+      current = null;
+      continue;
+    }
+    if (/^files\s*:\s*$/.test(trimmed)) {
+      inFiles = true;
+      filesIndent = indent;
+      current = null;
+      continue;
+    }
+    if (!inFiles) continue;
+    if (indent <= filesIndent) {
+      inFiles = false;
+      current = null;
+      continue;
+    }
+    const keyMatch = trimmed.match(/^(include|exclude)\s*:\s*(.*)$/);
+    if (keyMatch && indent > filesIndent) {
+      current = keyMatch[1] === 'include' ? include : exclude;
+      currentIndent = indent;
+      const rest = keyMatch[2].trim();
+      if (rest.startsWith('[')) {
+        for (const item of parseInlineList(rest)) {
+          current.push(...normalizeFilePattern(item, projectRoot));
+        }
+        current = null;
+      }
+      continue;
+    }
+    if (current && indent > currentIndent) {
+      const dashMatch = trimmed.match(/^-\s+(.*)$/);
+      if (dashMatch) {
+        const item = stripYamlScalar(dashMatch[1]);
+        if (item) current.push(...normalizeFilePattern(item, projectRoot));
+        continue;
+      }
+    }
+    if (indent <= currentIndent) current = null;
+  }
+
+  return { include, exclude };
+}
+
+/**
+ * Load file filter patterns for a project.
+ *
+ * `docscribe.yml` (`filter.files`) wins; without config (or without
+ * patterns) falls back to `exclude: ['spec']` like the RubyMine plugin.
+ * Empty exclude always defaults to `['spec']`; empty include means all.
+ *
+ * @param projectRoot - Absolute project root.
+ */
+export function loadFileFilterPatterns(projectRoot: string): FileFilterPatterns {
+  // Fallback goes through the same normalization so a present `spec/`
+  // dir becomes `spec/**/*` (bare `spec` would match nothing).
+  const fallback = normalizeFilePattern('spec', projectRoot);
+  const ymlPath = findDocscribeYml(projectRoot);
+  if (!ymlPath) return { include: [], exclude: fallback };
+  let content: string;
+  try {
+    content = fs.readFileSync(ymlPath, 'utf8');
+  } catch {
+    return { include: [], exclude: fallback };
+  }
+  const parsed = parseFilterFilesSection(content, projectRoot);
+  return {
+    include: parsed.include,
+    exclude: parsed.exclude.length > 0 ? parsed.exclude : fallback,
+  };
+}
+
+/**
+ * `.gitignore` patterns of the project root (best-effort subset).
+ */
+export interface GitignorePatterns {
+  ignore: string[];
+  negate: string[];
+}
+
+/**
+ * Load root `.gitignore` (comments/blank lines skipped, `!` = negation,
+ * `dir/` expanded to `dir/**`). Nested gitignores are not read.
+ *
+ * @param projectRoot - Absolute project root.
+ */
+export function loadGitignorePatterns(projectRoot: string): GitignorePatterns {
+  const ignore: string[] = [];
+  const negate: string[] = [];
+  let content: string;
+  try {
+    content = fs.readFileSync(path.join(projectRoot, '.gitignore'), 'utf8');
+  } catch {
+    return { ignore, negate };
+  }
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const isNegate = line.startsWith('!');
+    const body = (isNegate ? line.slice(1) : line).trim();
+    if (!body) continue;
+    const normalized = body.replace(/^\//, '');
+    const patterns = normalized.endsWith('/')
+      ? [`${normalized}**/*`]
+      : [normalized, `${normalized}/**/*`];
+    (isNegate ? negate : ignore).push(...patterns);
+  }
+  return { ignore, negate };
+}
+
+/**
  * Collect Ruby source files in a workspace for `check_batch`.
  *
  * Walks the project tree and returns absolute paths for `*.rb`, `*.rake`,
- * and `Rakefile`. Skips common non-source directories
- * (`.git`, `node_modules`, `vendor`, `out`, etc.) and hidden dirs.
- * Does not read `.gitignore` — uses a fixed exclude set matching the
- * RubyMine plugin's `WorkspaceCheckChunking.kt`.
+ * and `Rakefile`. Applies `docscribe.yml` `filter.files` (exclude wins,
+ * empty include = all) and root `.gitignore`; a fixed `excludeDirs` set
+ * stays as a safety net. Skips hidden and symlinked dirs.
  *
  * @param projectRoot - Absolute project root (contains `Gemfile`).
  * @param maxFiles - Hard limit to avoid pathological walks.
@@ -148,6 +392,9 @@ export function collectWorkspaceFiles(projectRoot: string, maxFiles = 5000): str
     'log',
     '.ruby-lsp',
   ]);
+  const { include, exclude } = loadFileFilterPatterns(projectRoot);
+  const gitignore = loadGitignorePatterns(projectRoot);
+  const toPosix = (p: string): string => path.relative(projectRoot, p).split(path.sep).join('/');
   const walk = (dir: string): void => {
     if (files.length >= maxFiles) return;
     let entries: fs.Dirent[];
@@ -175,6 +422,11 @@ export function collectWorkspaceFiles(projectRoot: string, maxFiles = 5000): str
           entry.name.endsWith('.rake') ||
           entry.name === 'Rakefile'
         ) {
+          const rel = toPosix(fullPath);
+          if (gitignore.ignore.some((p) => matchFilePattern(p, rel))) {
+            if (!gitignore.negate.some((p) => matchFilePattern(p, rel))) continue;
+          }
+          if (!processFileByFilter(rel, include, exclude)) continue;
           files.push(fullPath);
         }
       }
@@ -183,6 +435,20 @@ export function collectWorkspaceFiles(projectRoot: string, maxFiles = 5000): str
   walk(projectRoot);
   files.sort();
   return files;
+}
+
+/**
+ * Append `gem "rbs"` to Gemfile contents unless already present.
+ *
+ * Pure helper for the missing-RBS balloon action (card 466).
+ *
+ * @param gemfileContent - Raw Gemfile text.
+ * @returns Updated text, or `null` when the `rbs` gem is already listed.
+ */
+export function ensureRbsGemLine(gemfileContent: string): string | null {
+  if (/gem\s+['"]rbs['"]/.test(gemfileContent)) return null;
+  const normalized = gemfileContent.endsWith('\n') ? gemfileContent : `${gemfileContent}\n`;
+  return `${normalized}gem "rbs"\n`;
 }
 
 /**

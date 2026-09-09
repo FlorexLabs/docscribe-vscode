@@ -246,7 +246,7 @@ suite('docscribeClient', () => {
       assert.strictEqual(parsed.files[1].offenses.length, 0);
     });
 
-    test('counts error status in error_count and skips file entry', () => {
+    test('counts error status in error_count and surfaces Docscribe/Error entry', () => {
       const json = batchResultsToJson([
         { file: '/tmp/a.rb', status: 'ok', changes: [] },
         { file: '/tmp/b.rb', status: 'error', error: 'File not found' },
@@ -255,7 +255,42 @@ suite('docscribeClient', () => {
       assert.strictEqual(parsed.summary.target_file_count, 2);
       assert.strictEqual(parsed.summary.inspected_file_count, 1);
       assert.strictEqual(parsed.summary.error_count, 1);
-      assert.strictEqual(parsed.files.length, 1);
+      assert.strictEqual(parsed.files.length, 2);
+      const errorFile = parsed.files[1];
+      assert.strictEqual(errorFile.path, '/tmp/b.rb');
+      assert.strictEqual(errorFile.offenses.length, 1);
+      assert.strictEqual(errorFile.offenses[0].cop_name, 'Docscribe/Error');
+      assert.strictEqual(errorFile.offenses[0].severity, 'error');
+      assert.strictEqual(errorFile.offenses[0].message, 'File not found');
+    });
+
+    test('preserves change source in offenses', () => {
+      const json = batchResultsToJson([
+        {
+          file: '/tmp/a.rb',
+          status: 'fail',
+          changes: [{ line: 2, source: 'rbs' }, { line: 5, source: 'infer' }, { line: 7 }],
+        },
+      ]);
+      const parsed = JSON.parse(json);
+      const offenses = parsed.files[0].offenses;
+      assert.strictEqual(offenses[0].source, 'rbs');
+      assert.strictEqual(offenses[1].source, 'infer');
+      assert.strictEqual(offenses[2].source, undefined);
+    });
+
+    test('changesToCheckJson preserves change source', () => {
+      const json = changesToCheckJson('/tmp/a.rb', [{ line: 3, source: 'syntax' }]);
+      const parsed = JSON.parse(json);
+      assert.strictEqual(parsed.files[0].offenses[0].source, 'syntax');
+    });
+
+    test('drops unknown change source values', () => {
+      const json = batchResultsToJson([
+        { file: '/tmp/a.rb', status: 'fail', changes: [{ line: 2, source: 'alien' }] },
+      ]);
+      const parsed = JSON.parse(json);
+      assert.strictEqual(parsed.files[0].offenses[0].source, undefined);
     });
 
     test('handles empty results', () => {

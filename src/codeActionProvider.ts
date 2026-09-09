@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { execFile } from 'child_process';
 import { findProjectRoot, getCachedCapabilities, resolveRbsContext } from './docscribeRunner';
 import { ensureServerRunning, applyFixViaServer } from './docscribeClient';
+import { getDiagnosticSource } from './diagnosticProvider';
 
 interface DiffHunk {
   originalStart: number;
@@ -95,6 +96,22 @@ export class DocscribeCodeActionProvider implements vscode.CodeActionProvider {
     if (relevantDiags.length === 0) return undefined;
 
     const actions = relevantDiags.map((diag) => {
+      // RBS-sourced diagnostics are fixed via Update Types, not directly —
+      // mirror RubyMine fix routing (Updated*/InvalidType from RBS).
+      if (getDiagnosticSource(diag) === 'rbs') {
+        const action = new vscode.CodeAction(
+          `DocScribe: Update Types from RBS (${diag.message})`,
+          vscode.CodeActionKind.QuickFix,
+        );
+        action.command = {
+          command: 'docscribe.updateTypesForFile',
+          title: 'Update types from RBS',
+          arguments: [document.uri],
+        };
+        action.diagnostics = [diag];
+        action.isPreferred = true;
+        return action;
+      }
       const action = new vscode.CodeAction(
         `DocScribe: ${diag.message}`,
         vscode.CodeActionKind.QuickFix,

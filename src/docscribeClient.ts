@@ -372,28 +372,47 @@ export async function stopServer(): Promise<void> {
  * @param changes - Entries from the daemon response.
  * @returns A JSON string in CLI `--format json` format.
  */
+/**
+ * Change source reported by the daemon (gem >= 1.6.2): `rbs` (from RBS
+ * signatures), `infer` (heuristic inference) or `syntax` (invalid YARD).
+ */
+export type ChangeSource = 'rbs' | 'infer' | 'syntax';
+
+function changeLine(change: unknown): number {
+  return typeof change === 'object' &&
+    change !== null &&
+    typeof (change as Record<string, unknown>)['line'] === 'number'
+    ? ((change as Record<string, unknown>)['line'] as number)
+    : 1;
+}
+
+function changeSource(change: unknown): ChangeSource | undefined {
+  if (typeof change !== 'object' || change === null) return undefined;
+  const source = (change as Record<string, unknown>)['source'];
+  return source === 'rbs' || source === 'infer' || source === 'syntax' ? source : undefined;
+}
+
+function changeToOffense(change: unknown): Record<string, unknown> {
+  const line = changeLine(change);
+  const source = changeSource(change);
+  return {
+    severity: 'convention',
+    cop_name: 'DocScribe/MissingDocumentation',
+    message: 'Missing YARD documentation',
+    corrected: false,
+    correctable: true,
+    ...(source ? { source } : {}),
+    location: {
+      start_line: line,
+      start_column: 1,
+      last_line: line,
+      last_column: 1,
+    },
+  };
+}
+
 export function changesToCheckJson(filePath: string, changes: unknown): string {
-  const offenses = (Array.isArray(changes) ? changes : []).map((change) => {
-    const line =
-      typeof change === 'object' &&
-      change !== null &&
-      typeof (change as Record<string, unknown>)['line'] === 'number'
-        ? ((change as Record<string, unknown>)['line'] as number)
-        : 1;
-    return {
-      severity: 'convention',
-      cop_name: 'DocScribe/MissingDocumentation',
-      message: 'Missing YARD documentation',
-      corrected: false,
-      correctable: true,
-      location: {
-        start_line: line,
-        start_column: 1,
-        last_line: line,
-        last_column: 1,
-      },
-    };
-  });
+  const offenses = (Array.isArray(changes) ? changes : []).map(changeToOffense);
   return JSON.stringify({
     files: [{ path: filePath, offenses }],
     summary: {
@@ -410,8 +429,9 @@ export function changesToCheckJson(filePath: string, changes: unknown): string {
  *
  * Mirrors `DocscribeDaemon.buildBatchCheckJson` in the RubyMine plugin:
  * each result with `status: "ok"|"fail"` becomes a file entry with offenses
- * derived from `changes`; results with `status: "error"` count toward
- * `error_count` and are not added to `files`.
+ * derived from `changes` (preserving `source`); results with
+ * `status: "error"` count toward `error_count` and surface as a
+ * `Docscribe/Error` file entry so failures are visible, not silent.
  *
  * @param results - The `results` array from `check_batch` response.
  * @returns A JSON string in CLI `--format json` format.
@@ -422,6 +442,7 @@ export function batchResultsToJson(results: unknown): string {
   let offenseCount = 0;
   let errorCount = 0;
   let targetCount = 0;
+  let inspectedCount = 0;
 
   for (const entry of list) {
     if (typeof entry !== 'object' || entry === null) continue;
@@ -432,31 +453,26 @@ export function batchResultsToJson(results: unknown): string {
     const status = typeof rec['status'] === 'string' ? rec['status'] : 'error';
     if (status === 'error') {
       errorCount++;
+      const message =
+        typeof rec['error'] === 'string' && rec['error']
+          ? (rec['error'] as string)
+          : 'check failed';
+      const errorOffense = {
+        severity: 'error',
+        cop_name: 'Docscribe/Error',
+        message,
+        corrected: false,
+        correctable: false,
+        location: { start_line: 1, start_column: 1, last_line: 1, last_column: 1 },
+      };
+      offenseCount += 1;
+      files.push({ path: filePath, offenses: [errorOffense] });
       continue;
     }
     const changes = rec['changes'];
-    const offenses = (Array.isArray(changes) ? changes : []).map((change) => {
-      const line =
-        typeof change === 'object' &&
-        change !== null &&
-        typeof (change as Record<string, unknown>)['line'] === 'number'
-          ? ((change as Record<string, unknown>)['line'] as number)
-          : 1;
-      return {
-        severity: 'convention',
-        cop_name: 'DocScribe/MissingDocumentation',
-        message: 'Missing YARD documentation',
-        corrected: false,
-        correctable: true,
-        location: {
-          start_line: line,
-          start_column: 1,
-          last_line: line,
-          last_column: 1,
-        },
-      };
-    });
+    const offenses = (Array.isArray(changes) ? changes : []).map(changeToOffense);
     offenseCount += offenses.length;
+    inspectedCount++;
     files.push({ path: filePath, offenses });
   }
 
@@ -466,7 +482,7 @@ export function batchResultsToJson(results: unknown): string {
     summary: {
       offense_count: offenseCount,
       target_file_count: targetCount,
-      inspected_file_count: files.length,
+      inspected_file_count: inspectedCount,
       error_count: errorCount,
     },
   });
@@ -514,6 +530,48 @@ export async function checkFileViaServer(
   if (cliOverrides) params['cli_overrides'] = cliOverrides;
   const result = (await sendRequest('check', params)) as Record<string, unknown>;
   return changesToCheckJson(filePath, result?.['changes']);
+}
+
+/**
+ * Result of the daemon `update_types` RPC.
+ *
+ * Contract (gem `Daemon#handle_update_types`): success returns
+ * `{ status, dir, exit_code }`; failures arrive as JSON-RPC errors
+ * (`-32601` on gems without the method, i.e. < 1.6.2).
+ */
+export interface UpdateTypesResult {
+  status: string;
+  dir: string;
+  exit_code: number;
+}
+
+/**
+ * Run `update_types` through the daemon (file- or dir-scoped).
+ *
+ * The daemon writes the result to disk (like `fix`). Callers must
+ * refresh open documents afterwards.
+ *
+ * @param target - `{ file }` for a single file, `{ dir }` for a directory.
+ * @param cliOverrides - Optional RBS/validate overrides for the daemon.
+ * @returns Parsed `{ status, dir, exit_code }` result.
+ */
+export async function updateTypesViaServer(
+  target: { file?: string; dir?: string },
+  cliOverrides?: CliOverrides,
+): Promise<UpdateTypesResult> {
+  const params: Record<string, unknown> = {};
+  if (target.file) params['file'] = target.file;
+  if (target.dir) params['dir'] = target.dir;
+  if (cliOverrides) params['cli_overrides'] = cliOverrides;
+  const result = (await sendRequest('update_types', params)) as Record<string, unknown>;
+  return {
+    status: typeof result?.['status'] === 'string' ? (result['status'] as string) : 'error',
+    dir:
+      typeof result?.['dir'] === 'string'
+        ? (result['dir'] as string)
+        : (target.dir ?? target.file ?? ''),
+    exit_code: typeof result?.['exit_code'] === 'number' ? (result['exit_code'] as number) : 1,
+  };
 }
 
 /**

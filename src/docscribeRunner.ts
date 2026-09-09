@@ -2,7 +2,12 @@ import * as vscode from 'vscode';
 import * as proc from './execAsync';
 import * as path from 'path';
 import * as fs from 'fs';
-import { ensureServerRunning, checkFileViaServer, type CliOverrides } from './docscribeClient';
+import {
+  ensureServerRunning,
+  checkFileViaServer,
+  updateTypesViaServer,
+  type CliOverrides,
+} from './docscribeClient';
 import {
   gemfileHasRbs as gemfileListsRbs,
   shouldUseRbs,
@@ -583,6 +588,31 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
       }
     } catch {
       // Fallback to CLI
+    }
+  }
+
+  // Single-file update_types goes through the daemon when available
+  // (gem >= 1.6.2); workspace scope stays on CLI. The daemon writes the
+  // file — callers must refresh open documents afterwards.
+  const canUseUpdateTypesRpc = canUseServer && (caps ? caps.hasUpdateTypesRpc : false);
+  if (canUseUpdateTypesRpc && strategy === 'updateTypes' && !options.workspace) {
+    try {
+      const serverRunning = await ensureServerRunning(projectRoot);
+      if (serverRunning) {
+        const ut = await updateTypesViaServer({ file: filePath }, rbs.overrides);
+        const ok = ut.exit_code === 0;
+        const stdout = `update_types: ${ut.status} (${ut.dir})`;
+        return {
+          success: ok,
+          hasIssues: !ok,
+          exitCode: ut.exit_code,
+          stdout,
+          stderr: '',
+          output: stdout,
+        };
+      }
+    } catch {
+      // Fallback to CLI (also covers -32601 unknown method on old daemons)
     }
   }
 

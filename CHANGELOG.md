@@ -12,6 +12,9 @@
 ### Fixed
 
 - CLI parity with RubyMine: `--rbs` (+ `--rbs-collection` when the lock exists); `safe` strategy uses aggressive flags when RBS is on (RBS types only update in aggressive mode)
+- **File-scoped Update Types via daemon** — single-file `update_types` goes through the `update_types` RPC (`{ file }` → `{ status, dir, exit_code }`, gem >= 1.6.2) with CLI fallback; workspace scope stays on CLI; open documents refresh afterwards
+- **Fix source routing in QuickFix** — daemon `changes[].source` (`rbs` | `infer` | `syntax`) threaded through adapters, parser and diagnostics; RBS-sourced lightbulb offers Update Types, others offer direct fix
+- **Batch per-file errors surfaced** — `check_batch` `error` results become `Docscribe/Error` diagnostics instead of silent `error_count`
 
 ## [0.1.2] — TBD
 

@@ -346,7 +346,32 @@ export function activate(context: vscode.ExtensionContext) {
       runDocscribe({ strategy: 'updateTypes' }),
     );
     showResult(result);
+    await refreshOpenRubyDocuments();
   });
+
+  // Internal command for the RBS QuickFix (lightbulb only, no palette entry):
+  // update types for a single file, then refresh its diagnostics.
+  const updateTypesForFileCmd = vscode.commands.registerCommand(
+    'docscribe.updateTypesForFile',
+    async (uri: vscode.Uri) => {
+      if (!ensureGemInstalled() || !uri) return;
+      const result = await withProgress('DocScribe: updating types from RBS...', () =>
+        runDocscribe({ file: uri.fsPath, strategy: 'updateTypes' }),
+      );
+      showResult(result);
+      await refreshOpenRubyDocuments();
+    },
+  );
+
+  // update_types writes files on disk (daemon and CLI alike) — re-check
+  // open Ruby documents so diagnostics reflect the new contents.
+  async function refreshOpenRubyDocuments(): Promise<void> {
+    for (const doc of vscode.workspace.textDocuments) {
+      if (['ruby', 'rake'].includes(doc.languageId)) {
+        await checkDocument(doc);
+      }
+    }
+  }
 
   const doctorCmd = vscode.commands.registerCommand('docscribe.doctor', async () => {
     const channel = vscode.window.createOutputChannel('DocScribe Doctor');
@@ -455,6 +480,7 @@ export function activate(context: vscode.ExtensionContext) {
     editorListener,
     toggleFoldCmd,
     updateTypesCmd,
+    updateTypesForFileCmd,
     doctorCmd,
   );
 }

@@ -54,14 +54,15 @@ gem "rbs", group: :development
 
 All commands are available via **Command Palette** (`Cmd+Shift+P` / `Ctrl+Shift+P` -> type "DocScribe").
 
-| Command                                             | Keybinding (macOS)  | Description                                           |
-|-----------------------------------------------------|---------------------|-------------------------------------------------------|
-| `DocScribe: Check current file`                     | `Cmd+Shift+D`       | Analyze the active Ruby file for undocumented methods |
-| `DocScribe: Check entire workspace`                 | `Cmd+Shift+D` `W`   | Scan all Ruby files in the project                    |
-| `DocScribe: Apply safe fixes to current file`       | `Cmd+Shift+D` `S`   | Add docs to undocumented methods only (`-a`)          |
-| `DocScribe: Apply aggressive fixes to current file` | `Cmd+Shift+D` `A`   | Replace all existing YARD docs (`-A -k`)              |
-| `DocScribe: Update types from RBS`                  | `Cmd+Shift+D` `U`   | Two-pass: aggressive then safe update from RBS        |
-| `DocScribe: Toggle fold YARD comments`              | — (Command Palette) | Collapse all YARD comment blocks in the current file  |
+| Command                                             | Keybinding (macOS)  | Description                                                                                       |
+|-----------------------------------------------------|---------------------|---------------------------------------------------------------------------------------------------|
+| `DocScribe: Check current file`                     | `Cmd+Shift+D`       | Analyze the active Ruby file for undocumented methods                                             |
+| `DocScribe: Check entire workspace`                 | `Cmd+Shift+D` `W`   | Scan all Ruby files in the project                                                                |
+| `DocScribe: Apply safe fixes to current file`       | `Cmd+Shift+D` `S`   | Add docs to undocumented methods only (`-a`)                                                      |
+| `DocScribe: Apply aggressive fixes to current file` | `Cmd+Shift+D` `A`   | Replace all existing YARD docs (`-A -k`)                                                          |
+| `DocScribe: Update types from RBS`                  | `Cmd+Shift+D` `U`   | Two-pass: aggressive then safe update from RBS                                                    |
+| _(lightbulb only)_                                  | —                   | RBS-sourced diagnostics offer Update Types for the file (daemon `update_types` RPC, gem >= 1.6.2) |
+| `DocScribe: Toggle fold YARD comments`              | — (Command Palette) | Collapse all YARD comment blocks in the current file                                              |
 
 Chording (`Cmd+Shift+D` followed by `W`/`S`/`A`/`U`) works as a chord sequence — press and release `Cmd+Shift+D`,
 then press the second key within the chord timeout.

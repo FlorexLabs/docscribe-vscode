@@ -9,6 +9,8 @@ interface JsonOffense {
   message: string;
   corrected: boolean;
   correctable: boolean;
+  /** Change origin from the daemon (gem >= 1.6.2): `rbs` | `infer` | `syntax`. */
+  source?: string;
   location: {
     start_line: number;
     start_column: number;
@@ -37,8 +39,39 @@ interface JsonOutput {
 }
 
 interface FileDiagnostics {
-  issues: { line: number; message: string; severity: string; copName: string }[];
+  issues: {
+    line: number;
+    message: string;
+    severity: string;
+    copName: string;
+    source?: string;
+  }[];
   error: boolean;
+}
+
+/**
+ * Change origin per diagnostic (populated by `checkDocument`).
+ *
+ * `vscode.Diagnostic` has no metadata slot, so the source travels
+ * alongside via this map; the code action provider reads it back to
+ * route RBS fixes to Update Types. Same object identity as the
+ * collection entries, hence a `WeakMap` (no leaks on dispose).
+ */
+const diagnosticSources = new WeakMap<vscode.Diagnostic, string>();
+
+/**
+ * Origin (`rbs` | `infer` | `syntax`) of a docscribe diagnostic.
+ *
+ * @param diagnostic - Diagnostic created by {@link checkDocument}.
+ * @returns Source string, or `undefined` when unknown (CLI output, old gem).
+ */
+export function getDiagnosticSource(diagnostic: vscode.Diagnostic): string | undefined {
+  return diagnosticSources.get(diagnostic);
+}
+
+/** @internal */
+export function setDiagnosticSourceForTesting(diagnostic: vscode.Diagnostic, source: string): void {
+  diagnosticSources.set(diagnostic, source);
 }
 
 export function parseJsonOutput(output: string): Map<string, FileDiagnostics> {
@@ -63,6 +96,7 @@ export function parseJsonOutput(output: string): Map<string, FileDiagnostics> {
       message: o.message,
       severity: o.severity,
       copName: o.cop_name,
+      ...(typeof o.source === 'string' && o.source ? { source: o.source } : {}),
     }));
 
     files.set(file.path, { issues, error: false });
@@ -129,12 +163,13 @@ export async function checkDocument(document: vscode.TextDocument): Promise<RunR
     const line = Math.max(0, issue.line - 1);
     const range = new vscode.Range(line, 0, line, document.lineAt(line).text.length);
     const severity =
-      issue.severity === 'fatal'
+      issue.severity === 'fatal' || issue.severity === 'error'
         ? vscode.DiagnosticSeverity.Error
         : vscode.DiagnosticSeverity.Warning;
     const diag = new vscode.Diagnostic(range, issue.message, severity);
     diag.source = 'docscribe';
     diag.code = issue.copName;
+    if (issue.source) diagnosticSources.set(diag, issue.source);
     return diag;
   });
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.3] — TBD
+## [0.1.3] — 2026-09-10
 
 ### Features
 
@@ -36,7 +36,7 @@
 - **Language-model tools** — six `languageModelTools` (`check_file`, `check_workspace`, `safe_fix`, `aggressive_fix`,
   `update_types`, `doctor`) reusing the command paths; requires VSCode >= 1.90 (`engines` bumped)
 
-## [0.1.2] — TBD
+## [0.1.2] — 2026-08-21
 
 ### Features
 

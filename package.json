@@ -2,7 +2,7 @@
   "name": "docscribe-vscode",
   "displayName": "DocScribe",
   "description": "%extension.description%",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "unurgunite",
   "license": "MIT",
   "icon": "icon.png",

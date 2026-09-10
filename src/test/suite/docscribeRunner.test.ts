@@ -11,6 +11,13 @@ import {
   clearServerModeWarningForTesting,
   collectWorkspaceFiles,
   chunkArray,
+  normalizeFilePattern,
+  matchFilePattern,
+  processFileByFilter,
+  parseFilterFilesSection,
+  loadFileFilterPatterns,
+  loadGitignorePatterns,
+  ensureRbsGemLine,
 } from '../../docscribeRunner';
 
 const fixturesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'test', 'suite', 'fixtures');
@@ -177,11 +184,23 @@ suite('docscribeRunner', () => {
       assert.strictEqual(caps.hasBatchMode, true);
     });
 
-    test('parses 1.6.1 — server and batch', () => {
+    test('parses 1.6.1 — server and batch, no 1.6.2 features', () => {
       const caps = parseCapabilities('1.6.1');
       if (!caps) throw new Error('expected caps');
       assert.strictEqual(caps.hasServerMode, true);
       assert.strictEqual(caps.hasBatchMode, true);
+      assert.strictEqual(caps.hasValidateTypes, false);
+      assert.strictEqual(caps.hasUpdateTypesRpc, false);
+    });
+
+    test('parses 1.6.2 — validate-types and update_types RPC', () => {
+      const caps = parseCapabilities('1.6.2');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.version, '1.6.2');
+      assert.strictEqual(caps.hasServerMode, true);
+      assert.strictEqual(caps.hasBatchMode, true);
+      assert.strictEqual(caps.hasValidateTypes, true);
+      assert.strictEqual(caps.hasUpdateTypesRpc, true);
     });
 
     test('parses 2.0.0 — server and batch', () => {
@@ -242,6 +261,165 @@ suite('docscribeRunner', () => {
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
+    });
+
+    test('applies yml exclude and include', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-collect-'));
+      try {
+        fs.mkdirSync(path.join(root, 'lib'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'spec'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'lib', 'a.rb'), '');
+        fs.writeFileSync(path.join(root, 'spec', 'a_spec.rb'), '');
+        fs.writeFileSync(
+          path.join(root, 'docscribe.yml'),
+          'filter:\n  files:\n    exclude:\n      - spec/\n    include:\n      - lib/\n',
+        );
+        const files = collectWorkspaceFiles(root);
+        assert.ok(files.includes(path.join(root, 'lib', 'a.rb')));
+        assert.ok(!files.includes(path.join(root, 'spec', 'a_spec.rb')));
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('respects root gitignore with negation', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-collect-'));
+      try {
+        fs.mkdirSync(path.join(root, 'gen'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'gen', 'a.rb'), '');
+        fs.writeFileSync(path.join(root, 'gen', 'keep.rb'), '');
+        fs.writeFileSync(path.join(root, 'top.rb'), '');
+        fs.writeFileSync(path.join(root, '.gitignore'), 'gen/\n!gen/keep.rb\n');
+        const files = collectWorkspaceFiles(root);
+        assert.ok(!files.includes(path.join(root, 'gen', 'a.rb')));
+        assert.ok(files.includes(path.join(root, 'gen', 'keep.rb')));
+        assert.ok(files.includes(path.join(root, 'top.rb')));
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  suite('fileFilterPatterns', () => {
+    test('normalizeFilePattern expands dir shorthand', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-filter-'));
+      try {
+        fs.mkdirSync(path.join(root, 'spec'), { recursive: true });
+        assert.deepStrictEqual(normalizeFilePattern('spec/', root), ['spec/**/*']);
+        assert.deepStrictEqual(normalizeFilePattern('spec', root), ['spec/**/*']);
+        assert.deepStrictEqual(normalizeFilePattern('lib/*.rb', root), ['lib/*.rb']);
+        assert.deepStrictEqual(normalizeFilePattern('  ', root), []);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('matchFilePattern handles globs, collapsed segments and regex', () => {
+      assert.strictEqual(matchFilePattern('spec/**/*', 'spec/a/b_spec.rb'), true);
+      assert.strictEqual(matchFilePattern('spec/**/*', 'lib/a.rb'), false);
+      assert.strictEqual(matchFilePattern('lib/**/*.rb', 'lib/a.rb'), true);
+      assert.strictEqual(matchFilePattern('/_spec\\.rb$/', 'spec/a_spec.rb'), true);
+      assert.strictEqual(matchFilePattern('/_spec\\.rb$/', 'lib/a.rb'), false);
+      assert.strictEqual(matchFilePattern('**/.hidden.rb', '.hidden.rb'), true);
+    });
+
+    test('processFileByFilter: exclude wins, empty include means all', () => {
+      assert.strictEqual(processFileByFilter('lib/a.rb', [], []), true);
+      assert.strictEqual(processFileByFilter('spec/a.rb', [], ['spec']), true);
+      assert.strictEqual(processFileByFilter('spec/a.rb', [], ['spec/**/*']), false);
+      assert.strictEqual(processFileByFilter('lib/a.rb', ['lib/**/*'], ['lib/a.rb']), false);
+      assert.strictEqual(processFileByFilter('lib/a.rb', ['app/**/*'], []), false);
+      assert.strictEqual(processFileByFilter('lib/a.rb', ['lib/**/*'], []), true);
+    });
+
+    test('parseFilterFilesSection reads inline and dash forms', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-filter-'));
+      try {
+        const inline = parseFilterFilesSection(
+          'filter:\n  files:\n    include: [lib, app]\n    exclude: [spec]\n',
+          root,
+        );
+        assert.deepStrictEqual(inline.include, ['lib', 'app']);
+        assert.deepStrictEqual(inline.exclude, ['spec']);
+        const dash = parseFilterFilesSection(
+          'filter:\n  files:\n    exclude:\n      - spec/\n      - "tmp/x"\n',
+          root,
+        );
+        assert.deepStrictEqual(dash.include, []);
+        assert.deepStrictEqual(dash.exclude, ['spec/**/*', 'tmp/x']);
+        const missing = parseFilterFilesSection('other:\n  x: 1\n', root);
+        assert.deepStrictEqual(missing, { include: [], exclude: [] });
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('loadFileFilterPatterns falls back to spec exclude', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-filter-'));
+      try {
+        assert.deepStrictEqual(loadFileFilterPatterns(root), { include: [], exclude: ['spec'] });
+        fs.writeFileSync(
+          path.join(root, 'docscribe.yml'),
+          'filter:\n  files:\n    include: [lib]\n',
+        );
+        assert.deepStrictEqual(loadFileFilterPatterns(root), {
+          include: ['lib'],
+          exclude: ['spec'],
+        });
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('fallback exclude actually filters an existing spec dir', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-filter-'));
+      try {
+        fs.mkdirSync(path.join(root, 'spec'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'spec', 'a_spec.rb'), '');
+        fs.writeFileSync(path.join(root, 'top.rb'), '');
+        // no yml: fallback must expand to spec/**/* since the dir exists
+        assert.deepStrictEqual(loadFileFilterPatterns(root), {
+          include: [],
+          exclude: ['spec/**/*'],
+        });
+        const files = collectWorkspaceFiles(root);
+        assert.ok(files.includes(path.join(root, 'top.rb')));
+        assert.ok(!files.includes(path.join(root, 'spec', 'a_spec.rb')));
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('loadGitignorePatterns skips comments and splits negations', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-filter-'));
+      try {
+        fs.writeFileSync(path.join(root, '.gitignore'), '# comment\n\ngen/\n!gen/keep.rb\n');
+        assert.deepStrictEqual(loadGitignorePatterns(root), {
+          ignore: ['gen/**/*'],
+          negate: ['gen/keep.rb', 'gen/keep.rb/**/*'],
+        });
+        fs.rmSync(path.join(root, '.gitignore'));
+        assert.deepStrictEqual(loadGitignorePatterns(root), { ignore: [], negate: [] });
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  suite('ensureRbsGemLine', () => {
+    test('appends gem line when missing', () => {
+      const out = ensureRbsGemLine('source "https://rubygems.org"\ngem "rails"\n');
+      assert.ok(out?.endsWith('gem "rbs"\n'));
+      assert.ok(out?.includes('gem "rails"'));
+    });
+
+    test('adds trailing newline when missing', () => {
+      assert.strictEqual(ensureRbsGemLine('gem "rails"'), 'gem "rails"\ngem "rbs"\n');
+    });
+
+    test('returns null when already present', () => {
+      assert.strictEqual(ensureRbsGemLine('gem "rbs"\n'), null);
+      assert.strictEqual(ensureRbsGemLine("gem 'rbs'\n"), null);
     });
   });
 

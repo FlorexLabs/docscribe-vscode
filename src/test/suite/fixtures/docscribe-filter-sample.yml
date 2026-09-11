@@ -1,0 +1,7 @@
+# Sample filter.files config for workspace collection tests.
+filter:
+  files:
+    include:
+      - lib/
+    exclude:
+      - lib/internal/

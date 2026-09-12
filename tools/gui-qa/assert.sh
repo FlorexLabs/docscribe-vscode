@@ -51,7 +51,12 @@ assert_md5_same() {
   return 1
 }
 
-# log_tail <DocScribe-log-glob> — newest 1-DocScribe.log tail.
+# log_mark <logfile> — size+hash fingerprint (mtime lies: 1s granularity;
+# identical reruns append identical bytes, so hash alone also lies).
+log_mark() {
+  stat -f "%z" "$1"
+  tail -c 300 "$1" | md5
+}
 docscribe_log() {
   ls -t "$HOME"/Library/Application\ Support/Code/logs/*/window1/exthost/output_logging_*/1-DocScribe.log 2>/dev/null | head -n 1
 }

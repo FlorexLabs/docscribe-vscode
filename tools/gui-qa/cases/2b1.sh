@@ -12,8 +12,8 @@ sleep 1.5
 assert_ocr "2b1-chord" "Waiting for second key" || return 1
 escape
 log=$(docscribe_log)
-before=$(stat -f "%m %z" "$log")
+before=$(log_mark "$log")
 palette_run "DocScribe: Check current file"
-after=$(stat -f "%m %z" "$log")
+after=$(log_mark "$log")
 [[ "$after" != "$before" ]] || { echo "check did not run (log unchanged)" >&2; return 1; }
 return 0

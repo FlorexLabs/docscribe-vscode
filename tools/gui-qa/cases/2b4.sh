@@ -12,5 +12,6 @@ palette_run "DocScribe: Apply safe fixes to current file"
 grep -c "@return" "$STAND/gui-undoc.rb" | grep -q "[2-9]" || { echo "methods not documented" >&2; rmstand; return 1; }
 tail -c 2000 "$log" | grep -q "updated 1 file" || { echo "no updated-1-file in log" >&2; rmstand; return 1; }
 # NOTE: trailing-WS check lives in framework tests (card 498); release build still emits it.
+save_all
 rmstand
 return 0

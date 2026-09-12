@@ -22,6 +22,7 @@ palette_run "DocScribe: Doctor"
 rc=0
 assert_ocr "2a2" "Not found" || rc=1
 cp /tmp/gui-qa-settings.bak "$SET"
+close_window
 code --reuse-window "$HOME/qa-stand" >/dev/null 2>&1
 sleep 2
 return $rc

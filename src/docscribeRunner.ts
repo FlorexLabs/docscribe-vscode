@@ -574,6 +574,43 @@ export async function ensureFreshCapabilities(projectRoot: string): Promise<Capa
   return detectCapabilities(projectRoot);
 }
 
+/** Best-effort `ruby --version` ('' when undetectable). Exported for tests. */
+export async function rubyVersionString(): Promise<string> {
+  try {
+    return await new Promise<string>((resolve) => {
+      proc.execFile('ruby', ['--version'], {}, (err: Error | null, stdout: string) => {
+        resolve(err ? '' : stdout);
+      });
+    });
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * One-time capability warning text for a detected gem version (card 521, QA 2D.2–2D.4).
+ *
+ * Pure: all version/ruby branching lives here so tests can cover the matrix
+ * without spawning processes; `runDocscribe` only handles the once-flag and I/O.
+ *
+ * @param caps - Parsed capabilities (null when undetectable → no warning).
+ * @param rubyVersion - Output of `ruby --version` ('' when undetectable).
+ * @returns Warning message, or null when nothing to warn about.
+ */
+export function serverModeWarning(caps: Capabilities | null, rubyVersion: string): string | null {
+  if (!caps) return null;
+  if (!caps.hasServerMode) {
+    return `DocScribe gem ${caps.version} does not support server mode (requires >=1.5.1). Using CLI. Please upgrade: bundle update docscribe`;
+  }
+  if (caps.hasServerMode && !caps.hasBatchMode && rubyVersion.includes('ruby 4.')) {
+    return `DocScribe ${caps.version} has known check_batch issue on Ruby 4.0. Upgrade to >=1.6.1`;
+  }
+  if (caps.hasServerMode && !caps.hasValidateTypes) {
+    return `DocScribe ${caps.version} does not support validate-types and file-scoped update_types (requires >=1.6.2). Please upgrade: bundle update docscribe`;
+  }
+  return null;
+}
+
 export function parseCapabilities(version: string): Capabilities | null {
   const match = version.match(/(\d+)\.(\d+)\.(\d+)/);
   if (!match) return null;
@@ -830,33 +867,14 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
   const caps = await detectCapabilities(projectRoot);
   if (caps) {
     logInfo(`DocScribe: detected docscribe v${caps.version}`);
-    if (!caps.hasServerMode && !serverModeWarningShown) {
+  }
+  if (caps && !serverModeWarningShown) {
+    // 1.5.1 has server but check_batch buggy on Ruby 4.0 — needs `ruby --version`
+    const needRuby = caps.hasServerMode && !caps.hasBatchMode ? await rubyVersionString() : '';
+    const warning = serverModeWarning(caps, needRuby);
+    if (warning) {
       serverModeWarningShown = true;
-      vscode.window.showWarningMessage(
-        `DocScribe gem ${caps.version} does not support server mode (requires >=1.5.1). Using CLI. Please upgrade: bundle update docscribe`,
-      );
-    } else if (caps.hasServerMode && !caps.hasBatchMode && !serverModeWarningShown) {
-      // 1.5.1 has server but check_batch buggy on Ruby 4.0 — warn once
-      try {
-        const rubyVersion = await new Promise<string>((resolve) => {
-          proc.execFile('ruby', ['--version'], {}, (err: Error | null, stdout: string) => {
-            resolve(err ? '' : stdout);
-          });
-        });
-        if (rubyVersion.includes('ruby 4.')) {
-          serverModeWarningShown = true;
-          vscode.window.showWarningMessage(
-            `DocScribe ${caps.version} has known check_batch issue on Ruby 4.0. Upgrade to >=1.6.1`,
-          );
-        }
-      } catch {
-        // ignore
-      }
-    } else if (caps.hasServerMode && !caps.hasValidateTypes && !serverModeWarningShown) {
-      serverModeWarningShown = true;
-      vscode.window.showWarningMessage(
-        `DocScribe ${caps.version} does not support validate-types and file-scoped update_types (requires >=1.6.2). Please upgrade: bundle update docscribe`,
-      );
+      vscode.window.showWarningMessage(warning);
     }
   }
 

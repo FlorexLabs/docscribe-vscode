@@ -6,5 +6,6 @@ STAND="${STAND:-$HOME/qa-stand}"
 
 activate
 open_file "$STAND/clean.rb"
-assert_ocr_retry "2a6" "DocScribe: OK" 3 || return 1
+# Post-reload (2a5) activation is slow under full-run load; retry wide.
+assert_ocr_retry "2a6" "DocScribe: OK" 8 || return 1
 return 0

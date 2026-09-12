@@ -471,6 +471,8 @@ export function activate(context: vscode.ExtensionContext) {
   registerLmTools(context);
 }
 
-export function deactivate(): void {
-  stopServer();
+export function deactivate(): Promise<void> {
+  // Returned so VS Code waits for the shutdown RPC (card 522);
+  // stopServer itself bounds the wait.
+  return stopServer();
 }

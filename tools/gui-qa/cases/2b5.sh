@@ -10,5 +10,6 @@ open_file "$STAND/gui-partial.rb"
 palette_run "DocScribe: Apply aggressive fixes to current file"
 grep -q "Old desc" "$STAND/gui-partial.rb" || { echo "description lost" >&2; rmstand; return 1; }
 grep -q "@return" "$STAND/gui-partial.rb" || { echo "types not rebuilt" >&2; rmstand; return 1; }
+save_all
 rmstand
 return 0

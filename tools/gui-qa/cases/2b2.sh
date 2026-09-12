@@ -14,8 +14,8 @@ toast_once() {
 activate
 open_file "/tmp/qempty/note.txt"
 log=$(docscribe_log)
-before=$(stat -f "%m %z" "$log")
+before=$(log_mark "$log")
 toast_once || toast_once || return 1
-after=$(stat -f "%m %z" "$log")
+after=$(log_mark "$log")
 [[ "$after" == "$before" ]] || { echo "check ran on .txt" >&2; return 1; }
 return 0

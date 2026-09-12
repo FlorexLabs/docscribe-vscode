@@ -10,6 +10,11 @@ export async function run(): Promise<void> {
     timeout: 30000,
   });
 
+  // Focused runs: MOCHA_GREP='wedged daemon' npm test
+  if (process.env.MOCHA_GREP) {
+    mocha.grep(process.env.MOCHA_GREP);
+  }
+
   mocha.rootHooks(failureScreenshotHooks);
 
   const testsRoot = path.resolve(__dirname);

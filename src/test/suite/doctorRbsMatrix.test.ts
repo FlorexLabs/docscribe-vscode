@@ -29,6 +29,7 @@ import {
   parseCapabilities,
   resolveRbsContext,
   runDocscribe,
+  serverModeWarning,
 } from '../../docscribeRunner';
 import runnerReal = require('../../docscribeRunner'); // eslint-disable-line @typescript-eslint/no-require-imports -- shared exports object for stubbing
 import childProcess = require('child_process'); // eslint-disable-line @typescript-eslint/no-require-imports -- shared exports object for stubbing
@@ -881,6 +882,66 @@ suite('doctorRbsMatrix (QA 2D/2E/2H)', () => {
       } finally {
         restoreDocs();
         restoreFolders();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  suite('capability gates (card 521, QA 2D.2–2D.4/2D.6)', () => {
+    test('parse matrix across gem generations', () => {
+      const old = parseCapabilities('1.4.0');
+      assert.ok(old);
+      assert.strictEqual(old.hasServerMode, false);
+      const mid = parseCapabilities('1.5.1');
+      assert.ok(mid);
+      assert.strictEqual(mid.hasServerMode, true);
+      assert.strictEqual(mid.hasBatchMode, false);
+      assert.strictEqual(mid.hasValidateTypes, false);
+      const late = parseCapabilities('1.6.0');
+      assert.ok(late);
+      assert.strictEqual(late.hasBatchMode, true);
+      assert.strictEqual(late.hasValidateTypes, false);
+      assert.strictEqual(late.hasUpdateTypesRpc, false);
+      const cur = parseCapabilities('1.6.2');
+      assert.ok(cur);
+      assert.strictEqual(cur.hasValidateTypes, true);
+      assert.strictEqual(cur.hasUpdateTypesRpc, true);
+    });
+
+    test('serverModeWarning: old gem, ruby4 batch, missing validate-types, clean', () => {
+      assert.ok(
+        String(serverModeWarning(parseCapabilities('1.4.0'), '')).includes('requires >=1.5.1'),
+      );
+      assert.ok(
+        String(serverModeWarning(parseCapabilities('1.5.1'), 'ruby 4.0.6')).includes('check_batch'),
+      );
+      assert.ok(
+        String(serverModeWarning(parseCapabilities('1.5.1'), 'ruby 3.4.5')).includes(
+          'requires >=1.6.2',
+        ),
+      );
+      assert.ok(
+        String(serverModeWarning(parseCapabilities('1.6.0'), '')).includes('requires >=1.6.2'),
+      );
+      assert.strictEqual(serverModeWarning(parseCapabilities('1.6.2'), ''), null);
+      assert.strictEqual(serverModeWarning(null, ''), null);
+    });
+
+    test('ensureFreshCapabilities re-probes when Gemfile.lock changes (2D.6)', async () => {
+      const root = makeRoot();
+      try {
+        writeFile(root, 'Gemfile', 'gem "docscribe"\n');
+        writeFile(root, 'Gemfile.lock', 'v1');
+        let version: string | null = '1.6.2';
+        stubExec({ version: () => version, mainStdout: '{}', captured: [] });
+        const first = await ensureFreshCapabilities(root);
+        assert.strictEqual(first?.version, '1.6.2');
+        version = '1.6.3';
+        const later = new Date(Date.now() + 5000);
+        fs.utimesSync(path.join(root, 'Gemfile.lock'), later, later);
+        const fresh = await ensureFreshCapabilities(root);
+        assert.strictEqual(fresh?.version, '1.6.3');
+      } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
     });

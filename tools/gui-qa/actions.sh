@@ -74,6 +74,35 @@ for o in d:
   cliclick c:$xy
   sleep 1
 }
+# pageup [n] — Page Up n times in the focused view (default 4).
+pageup() {
+  local n="${1:-4}" i
+  for (( i = 0; i < n; i++ )); do
+    osascript -e 'tell application "System Events" to key code 116'
+    sleep 0.3
+  done
+}
+
+# pagedown [n] — Page Down n times in the focused view (default 2).
+pagedown() {
+  local n="${1:-2}" i
+  for (( i = 0; i < n; i++ )); do
+    osascript -e 'tell application "System Events" to key code 121'
+    sleep 0.3
+  done
+}
+# close_window — Cmd+Shift+W (caller must ensure no dirty tabs: hot exit covers the rest).
+close_window() {
+  osascript -e 'tell application "System Events" to keystroke "w" using {command down, shift down}'
+  sleep 2
+}
+
+# save_all — File: Save All Files via palette (no focus needed).
+save_all() {
+  palette "File: Save All Files"
+  osascript -e 'tell application "System Events" to key code 36'
+  sleep 2
+}
 # open_file <path> — via `code` CLI (no :line suffix; navigate with ctrl_g).
 open_file() {
   code --reuse-window "$1" >/dev/null 2>&1

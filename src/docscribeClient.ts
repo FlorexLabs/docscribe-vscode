@@ -344,11 +344,19 @@ export async function ensureServerRunning(projectRoot: string): Promise<boolean>
  *
  * The daemon itself removes socket/pid on `shutdown` (`Daemon#cleanup`);
  * we clean again as a safeguard for stale leftovers.
+ *
+ * The shutdown RPC is bounded (~4s): `deactivate` awaits this, and a wedged
+ * daemon must not hold the quit path hostage (card 522).
  */
 export async function stopServer(): Promise<void> {
   const target = socketPath;
   try {
-    await sendRequest('shutdown');
+    await Promise.race([
+      sendRequest('shutdown'),
+      sleep(4000).then(() => {
+        throw new Error('shutdown timeout');
+      }),
+    ]);
   } catch {
     // ignore
   }

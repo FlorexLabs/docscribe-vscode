@@ -1,6 +1,11 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import * as pkg from '../../../package.json';
+import { getCommentBlockStartLines } from '../../foldingProvider';
+
+const fixturesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'test', 'suite', 'fixtures');
 
 suite('DocScribe Extension', () => {
   test('extension should be present', () => {
@@ -90,6 +95,53 @@ suite('DocScribe Extension', () => {
       assert.ok(prop);
       assert.strictEqual(prop.type, 'boolean');
       assert.strictEqual(prop.default, false);
+    });
+  });
+
+  suite('B8: palette contents (card 512)', () => {
+    test('should expose exactly 8 commands, updateTypesForFile absent', () => {
+      const cmds = pkg.contributes.commands.map((c: { command: string }) => c.command);
+      assert.strictEqual(cmds.length, 8);
+      for (const expected of [
+        'docscribe.checkFile',
+        'docscribe.checkWorkspace',
+        'docscribe.safeFix',
+        'docscribe.aggressiveFix',
+        'docscribe.applyFix',
+        'docscribe.toggleFoldComments',
+        'docscribe.updateTypes',
+        'docscribe.doctor',
+      ]) {
+        assert.ok(cmds.includes(expected), `missing palette command ${expected}`);
+      }
+      assert.ok(
+        !cmds.includes('docscribe.updateTypesForFile'),
+        'updateTypesForFile is bulb-only by design',
+      );
+    });
+  });
+
+  suite('folding ranges (card 512)', () => {
+    test('detects comment blocks of 3+ lines', async () => {
+      const filePath = path.join(fixturesDir, `qa512-fold-${Date.now()}.rb`);
+      fs.writeFileSync(filePath, 'class A\n  # one\n  # two\n  # three\n  def foo\n  end\nend\n');
+      try {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+        assert.deepStrictEqual(getCommentBlockStartLines(doc), [1]);
+      } finally {
+        fs.unlinkSync(filePath);
+      }
+    });
+
+    test('ignores short comment runs', async () => {
+      const filePath = path.join(fixturesDir, `qa512-short-${Date.now()}.rb`);
+      fs.writeFileSync(filePath, 'class A\n  # one\n  # two\n  def foo\n  end\nend\n');
+      try {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+        assert.deepStrictEqual(getCommentBlockStartLines(doc), []);
+      } finally {
+        fs.unlinkSync(filePath);
+      }
     });
   });
 });

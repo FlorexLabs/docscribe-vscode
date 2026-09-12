@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 
@@ -16,6 +17,7 @@ import {
   isProcessAlive,
   cleanSocketFiles,
   handleStaleSocket,
+  stopServer,
 } from '../../docscribeClient';
 
 suite('docscribeClient', () => {
@@ -349,6 +351,103 @@ suite('docscribeClient', () => {
         assert.ok(localeNote.includes('en_US.UTF-8'));
         const env = localeEnv();
         assert.strictEqual(env.LANG, 'en_US.UTF-8');
+      } finally {
+        if (savedLang !== undefined) process.env.LANG = savedLang;
+        else delete process.env.LANG;
+        if (savedLc !== undefined) process.env.LC_ALL = savedLc;
+        else delete process.env.LC_ALL;
+      }
+    });
+
+    suite('stopServer (card 522)', () => {
+      async function fakeDaemon(
+        respond: boolean,
+      ): Promise<{ dir: string; sock: string; got: string[]; close: () => Promise<void> }> {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-stop-'));
+        const sock = path.join(dir, 'd.sock');
+        const got: string[] = [];
+        const conns = new Set<import('net').Socket>();
+        const server = net.createServer((conn: import('net').Socket) => {
+          conns.add(conn);
+          conn.on('close', () => conns.delete(conn));
+          let data = '';
+          conn.on('data', (chunk: Buffer) => {
+            data += chunk.toString();
+            try {
+              const req = JSON.parse(data) as { method?: string; id?: unknown };
+              if (typeof req.method === 'string') {
+                got.push(req.method);
+                if (respond) {
+                  conn.write(`${JSON.stringify({ jsonrpc: '2.0', id: req.id, result: 'ok' })}\n`);
+                }
+              }
+            } catch {
+              // partial frame, wait for more
+            }
+          });
+        });
+        await new Promise<void>((resolve) => server.listen(sock, resolve));
+        fs.writeFileSync(`${sock}.pid`, `${process.pid}`);
+        const close = (): Promise<void> =>
+          new Promise<void>((resolve) => {
+            for (const c of conns) {
+              try {
+                c.destroy();
+              } catch {
+                // ignore
+              }
+            }
+            server.close(() => resolve());
+          });
+        return { dir, sock, got, close };
+      }
+
+      test('sends shutdown and cleans socket files', async () => {
+        const fake = await fakeDaemon(true);
+        setSocketPathForTesting(fake.sock);
+        try {
+          await stopServer();
+          assert.deepStrictEqual(fake.got, ['shutdown']);
+          assert.strictEqual(fs.existsSync(fake.sock), false);
+          assert.strictEqual(fs.existsSync(`${fake.sock}.pid`), false);
+          assert.strictEqual(getSocketPath(), null);
+        } finally {
+          setSocketPathForTesting(null);
+          await fake.close();
+          fs.rmSync(fake.dir, { recursive: true, force: true });
+        }
+      });
+
+      test('wedged daemon does not hold stop hostage, files still cleaned', async () => {
+        const fake = await fakeDaemon(false);
+        setSocketPathForTesting(fake.sock);
+        try {
+          const start = Date.now();
+          await stopServer();
+          const elapsed = Date.now() - start;
+          assert.ok(elapsed < 15000, `stop took ${elapsed}ms (must bound ~4s, not 30s)`);
+          assert.strictEqual(fs.existsSync(fake.sock), false);
+          assert.strictEqual(fs.existsSync(`${fake.sock}.pid`), false);
+        } finally {
+          setSocketPathForTesting(null);
+          await fake.close();
+          fs.rmSync(fake.dir, { recursive: true, force: true });
+        }
+      });
+    });
+
+    test('localeEnv passes set LANG through, pins LC_ALL, keeps PATH (2D.9)', () => {
+      const savedLang = process.env.LANG;
+      const savedLc = process.env.LC_ALL;
+      try {
+        process.env.LANG = 'ru_RU.UTF-8';
+        delete process.env.LC_ALL;
+        const env = localeEnv();
+        assert.strictEqual(env.LANG, 'ru_RU.UTF-8');
+        assert.strictEqual(env.LC_ALL, 'ru_RU.UTF-8');
+        assert.strictEqual(env.PATH, process.env.PATH);
+        process.env.LANG = '   ';
+        assert.strictEqual(localeEnv().LANG, 'en_US.UTF-8');
       } finally {
         if (savedLang !== undefined) process.env.LANG = savedLang;
         else delete process.env.LANG;

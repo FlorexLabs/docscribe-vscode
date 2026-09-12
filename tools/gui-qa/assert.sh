@@ -1,0 +1,62 @@
+#!/bin/zsh
+# Screenshot + Vision OCR assertions. Screenshots stay files; only text is asserted.
+VOCR="${VOCR:-$HOME/qa-vm-bin/vocr}"
+SHOT_DIR="${SHOT_DIR:-/tmp/gui-qa}"
+mkdir -p "$SHOT_DIR"
+LAST_SHOT=""
+
+shot() {
+  LAST_SHOT="$SHOT_DIR/$1.png"
+  screencapture -x "$LAST_SHOT"
+}
+
+ocr_text() {
+  "$VOCR" --text-only "$LAST_SHOT" 2>/dev/null
+}
+
+ocr_json() {
+  "$VOCR" "$LAST_SHOT" 2>/dev/null
+}
+
+# assert_ocr <shot-name> <grep-pattern> — screenshots then greps OCR text.
+assert_ocr() {
+  shot "$1"
+  if ocr_text | grep -qiE "$2"; then
+    return 0
+  fi
+  echo "OCR miss for /$2/ in $LAST_SHOT" >&2
+  return 1
+}
+
+# assert_ocr_retry <shot-name> <grep-pattern> [tries=3] — screenshot+grep with settle waits.
+assert_ocr_retry() {
+  local tries="${3:-3}" i
+  for (( i = 1; i <= tries; i++ )); do
+    shot "$1"
+    if ocr_text | grep -qiE "$2"; then
+      return 0
+    fi
+    sleep 4
+  done
+  echo "OCR miss for /$2/ in $LAST_SHOT after $tries tries" >&2
+  return 1
+}
+assert_md5_same() {
+  local actual
+  actual=$(md5 -q "$1")
+  if [[ "$actual" == "$2" ]]; then
+    return 0
+  fi
+  echo "md5 changed for $1: $actual != $2" >&2
+  return 1
+}
+
+# log_mark <logfile> — size+hash fingerprint (mtime lies: 1s granularity;
+# identical reruns append identical bytes, so hash alone also lies).
+log_mark() {
+  stat -f "%z" "$1"
+  tail -c 300 "$1" | md5
+}
+docscribe_log() {
+  ls -t "$HOME"/Library/Application\ Support/Code/logs/*/window1/exthost/output_logging_*/1-DocScribe.log 2>/dev/null | head -n 1
+}

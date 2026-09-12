@@ -1,6 +1,7 @@
 import * as path from 'path';
 import Mocha from 'mocha';
 import { glob } from 'glob';
+import { failureScreenshotHooks } from './failureScreenshots';
 
 export async function run(): Promise<void> {
   const mocha = new Mocha({
@@ -8,6 +9,13 @@ export async function run(): Promise<void> {
     color: true,
     timeout: 30000,
   });
+
+  // Focused runs: MOCHA_GREP='wedged daemon' npm test
+  if (process.env.MOCHA_GREP) {
+    mocha.grep(process.env.MOCHA_GREP);
+  }
+
+  mocha.rootHooks(failureScreenshotHooks);
 
   const testsRoot = path.resolve(__dirname);
 

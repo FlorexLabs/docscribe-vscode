@@ -152,6 +152,19 @@ export class DocscribeCodeActionProvider implements vscode.CodeActionProvider {
   }
 }
 
+/**
+ * Strip trailing spaces/tabs from fix output lines (card 498).
+ *
+ * The gem sometimes emits whitespace-only separator lines; inserting them
+ * verbatim trips `Layout/TrailingWhitespace` and pollutes diffs.
+ */
+function trimTrailingWhitespace(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+$/, ''))
+    .join('\n');
+}
+
 export async function applyFix(
   uri: vscode.Uri,
   diagnostic?: vscode.Diagnostic,
@@ -254,7 +267,7 @@ export async function applyFix(
       const edit = new vscode.WorkspaceEdit();
       for (const hunk of sorted) {
         const range = new vscode.Range(hunk.originalStart, 0, hunk.originalEnd, 0);
-        edit.replace(uri, range, hunk.newLines.join('\n') + '\n');
+        edit.replace(uri, range, trimTrailingWhitespace(hunk.newLines.join('\n')) + '\n');
       }
 
       const applied = await vscode.workspace.applyEdit(edit);
@@ -269,7 +282,7 @@ export async function applyFix(
     const lastCol = doc.lineAt(lastLine).text.length;
     const fullRange = new vscode.Range(0, 0, lastLine, lastCol);
     const edit = new vscode.WorkspaceEdit();
-    edit.replace(uri, fullRange, fixedCode);
+    edit.replace(uri, fullRange, trimTrailingWhitespace(fixedCode));
 
     const applied = await vscode.workspace.applyEdit(edit);
     if (applied) {

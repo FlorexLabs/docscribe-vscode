@@ -211,7 +211,11 @@ export function createDiagnosticProvider(
     if (result && onCheckResult) onCheckResult(result);
   });
 
-  const base = vscode.Disposable.from(collection, onSave, onOpen);
+  // NOTE: the shared module-level `collection` is intentionally NOT part of
+  // this disposable. It lives as long as the module (i.e. the extension host
+  // lifetime); disposing it here would permanently brick all diagnostics on
+  // any re-activation, since the module never recreates it.
+  const base = vscode.Disposable.from(onSave, onOpen);
   return {
     dispose: () => {
       for (const timer of debounceTimers.values()) clearTimeout(timer);

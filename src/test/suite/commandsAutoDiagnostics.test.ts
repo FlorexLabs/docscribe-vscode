@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import * as runner from '../../docscribeRunner';
 import type { RunOptions, RunResult } from '../../docscribeRunner';
 import { checkDocument, createDiagnosticProvider } from '../../diagnosticProvider';
-import { updateStatusBar } from '../../extension';
+import { updateStatusBar, showResult, getStatusBarTextForTesting } from '../../extension';
 
 const fixturesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'test', 'suite', 'fixtures');
 const fixture481 = path.join(fixturesDir, 'qa481-undocumented.rb');
@@ -304,6 +304,107 @@ suite('commands + auto-diagnostics (QA 2A/2B)', function () {
         runStub.calledWith(sinon.match({ strategy: 'aggressive' })),
         'aggressiveFix should run with strategy aggressive',
       );
+    });
+
+    test('checkFile on a non-Ruby file warns and does not run (card 509)', async () => {
+      const callsBefore = runStub.callCount;
+      const warnStub = sinon.stub(
+        vscode.window,
+        'showWarningMessage',
+      ) as unknown as sinon.SinonStub;
+      warnStub.resolves(undefined);
+      const jsPath = path.join(fixturesDir, `qa509-note-${Date.now()}.js`);
+      fs.writeFileSync(jsPath, 'const x = 1;\n');
+      try {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(jsPath));
+        await vscode.window.showTextDocument(doc);
+        await vscode.commands.executeCommand('docscribe.checkFile');
+        assert.ok(
+          warnStub.calledWith('Open a Ruby or Rake file first'),
+          'should warn about Ruby/Rake first',
+        );
+        assert.strictEqual(runStub.callCount, callsBefore, 'check must not run on .js');
+      } finally {
+        warnStub.restore();
+        await closeAllEditors();
+        fs.unlinkSync(jsPath);
+      }
+    });
+
+    test('checkFile failure surfaces the error toast (card 509)', async () => {
+      const errStub = sinon.stub(vscode.window, 'showErrorMessage') as unknown as sinon.SinonStub;
+      errStub.resolves(undefined);
+      runStub.resetBehavior();
+      runStub.resolves(okResult({ success: false, exitCode: 2, stderr: 'boom', output: 'boom' }));
+      try {
+        await vscode.commands.executeCommand('docscribe.checkFile');
+        assert.ok(
+          errStub.calledWith('DocScribe: see output for details'),
+          'should point at Output on error',
+        );
+        assert.ok(
+          getStatusBarTextForTesting().includes('error'),
+          `status should be error, got: ${getStatusBarTextForTesting()}`,
+        );
+      } finally {
+        errStub.restore();
+      }
+    });
+
+    test('checkFile with issues reflects them in the status bar (card 511)', async () => {
+      await vscode.commands.executeCommand('docscribe.checkFile');
+      assert.ok(
+        getStatusBarTextForTesting().includes('issues found'),
+        `status should report issues, got: ${getStatusBarTextForTesting()}`,
+      );
+    });
+  });
+
+  suite('showResult (card 510)', () => {
+    test('error result shows the error toast', () => {
+      const errStub = sinon.stub(vscode.window, 'showErrorMessage') as unknown as sinon.SinonStub;
+      errStub.resolves(undefined);
+      try {
+        showResult(okResult({ success: false, exitCode: 2, stderr: 'boom', output: 'boom' }));
+        assert.ok(errStub.calledWith('DocScribe: see output for details'));
+      } finally {
+        errStub.restore();
+      }
+    });
+
+    test('cancelled result shows info toast and idle status, no error', () => {
+      const errStub = sinon.stub(vscode.window, 'showErrorMessage') as unknown as sinon.SinonStub;
+      errStub.resolves(undefined);
+      const infoStub = sinon.stub(
+        vscode.window,
+        'showInformationMessage',
+      ) as unknown as sinon.SinonStub;
+      infoStub.resolves(undefined);
+      try {
+        showResult(okResult({ success: false, cancelled: true, exitCode: 2, stderr: 'Cancelled' }));
+        assert.ok(infoStub.calledWith('DocScribe: cancelled'));
+        assert.strictEqual(errStub.callCount, 0, 'no error toast on cancel');
+        assert.ok(
+          !getStatusBarTextForTesting().includes('error'),
+          `status should be idle, got: ${getStatusBarTextForTesting()}`,
+        );
+      } finally {
+        errStub.restore();
+        infoStub.restore();
+      }
+    });
+  });
+
+  suite('updateStatusBar text (card 511)', () => {
+    test('null/ok/issues/error map to distinct texts', () => {
+      updateStatusBar(null);
+      assert.ok(!getStatusBarTextForTesting().includes('issues'));
+      updateStatusBar(okResult({ hasIssues: true, exitCode: 1 }));
+      assert.ok(getStatusBarTextForTesting().includes('issues found'));
+      updateStatusBar(okResult());
+      assert.ok(getStatusBarTextForTesting().includes('OK'));
+      updateStatusBar(okResult({ success: false, exitCode: 2, stderr: 'boom' }));
+      assert.ok(getStatusBarTextForTesting().includes('error'));
     });
   });
 });

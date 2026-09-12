@@ -90,6 +90,11 @@ export function updateStatusBar(result: RunResult | null): void {
   }
 }
 
+/** Current status-bar text (exported for tests, card 511). */
+export function getStatusBarTextForTesting(): string {
+  return statusBarItem ? statusBarItem.text : '';
+}
+
 async function withProgress<T>(
   title: string,
   task: (signal: AbortSignal) => Promise<T>,
@@ -113,7 +118,8 @@ function requireRubyFile(): boolean {
   return true;
 }
 
-function showResult(result: RunResult): void {
+/** Rendered for tests (card 510): status update + error/cancelled toasts. */
+export function showResult(result: RunResult): void {
   if (result.cancelled) {
     updateStatusBar(null);
     vscode.window.showInformationMessage('DocScribe: cancelled');

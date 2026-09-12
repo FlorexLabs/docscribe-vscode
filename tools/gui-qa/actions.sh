@@ -33,6 +33,12 @@ ctrl_g() {
   sleep 1
 }
 
+# problems — focus the Problems view via palette (hotkey unreliable headless).
+problems() {
+  palette "View: Show Problems"
+  osascript -e 'tell application "System Events" to key code 36'
+  sleep 2
+}
 # shift_f10 — context menu at cursor.
 shift_f10() {
   osascript -e 'tell application "System Events" to key code 109 using {shift down}'

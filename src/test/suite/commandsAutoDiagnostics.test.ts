@@ -64,19 +64,47 @@ function checkJsonFor(targetFile: string): string {
 }
 
 /** Stubbed `runDocscribe`: check → offense JSON, workspace/fix → canned result. */
-function stubRunner(): sinon.SinonStub {
+function stubRunner(checkJson?: (target: string) => string): sinon.SinonStub {
   return sinon.stub(runner, 'runDocscribe').callsFake(async (options: RunOptions) => {
     if (options.workspace) {
       return okResult({ stdout: '{"files":[]}', output: '{"files":[]}' });
     }
     const target =
       options.file ?? vscode.window.activeTextEditor?.document.uri.fsPath ?? fixture481;
-    return okResult({
-      hasIssues: true,
-      exitCode: 1,
-      stdout: checkJsonFor(target),
-      output: checkJsonFor(target),
-    });
+    const body = checkJson ? checkJson(target) : checkJsonFor(target);
+    return okResult({ hasIssues: true, exitCode: 1, stdout: body, output: body });
+  });
+}
+
+function emptyFilesJson(): string {
+  return JSON.stringify({
+    metadata: { docscribe_version: '9.9.9', ruby_version: '3.2.0' },
+    files: [],
+    summary: { offense_count: 0, target_file_count: 0, inspected_file_count: 0, error_count: 0 },
+  });
+}
+
+function errorJsonFor(targetFile: string): string {
+  const root = runner.findProjectRoot(targetFile) ?? fixturesDir;
+  const rel = path.relative(root, targetFile);
+  return JSON.stringify({
+    metadata: { docscribe_version: '9.9.9', ruby_version: '3.2.0' },
+    files: [
+      {
+        path: rel,
+        offenses: [
+          {
+            severity: 'error',
+            cop_name: 'DocScribe/InvalidType',
+            message: 'Invalid YARD type `Sym bol`',
+            corrected: false,
+            correctable: false,
+            location: { start_line: 1, start_column: 1, last_line: 1, last_column: 1 },
+          },
+        ],
+      },
+    ],
+    summary: { offense_count: 1, target_file_count: 1, inspected_file_count: 1, error_count: 1 },
   });
 }
 
@@ -405,6 +433,109 @@ suite('commands + auto-diagnostics (QA 2A/2B)', function () {
       assert.ok(getStatusBarTextForTesting().includes('OK'));
       updateStatusBar(okResult({ success: false, exitCode: 2, stderr: 'boom' }));
       assert.ok(getStatusBarTextForTesting().includes('error'));
+    });
+  });
+
+  suite('diagnostics QA 2C (card 520)', () => {
+    let runStub: sinon.SinonStub | undefined;
+    const scratches: string[] = [];
+
+    teardown(async () => {
+      runStub?.restore();
+      runStub = undefined;
+      await closeAllEditors();
+      for (const file of scratches.splice(0)) {
+        try {
+          fs.unlinkSync(file);
+        } catch {
+          // ignore
+        }
+      }
+    });
+
+    async function openScratch(name: string, content: string): Promise<vscode.Uri> {
+      const filePath = path.join(fixturesDir, `${name}-${Date.now()}.rb`);
+      fs.writeFileSync(filePath, content);
+      scratches.push(filePath);
+      const uri = vscode.Uri.file(filePath);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(doc);
+      return uri;
+    }
+
+    test('2C.1 diagnostic spans the whole method line with source and cop code', async () => {
+      runStub = stubRunner();
+      const uri = await openScratch(
+        'qa520-line',
+        'class W\n  def render(name)\n    name\n  end\nend\n',
+      );
+      const diags = await waitForDiag(uri);
+      const found = diags.find((d) => d.code === COP);
+      assert.ok(found, 'expected MissingDocumentation diagnostic');
+      assert.strictEqual(found.source, 'docscribe');
+      assert.strictEqual(found.range.start.line, 1, 'def line (0-indexed)');
+      assert.strictEqual(found.range.start.character, 0, 'line start');
+      const doc = await vscode.workspace.openTextDocument(uri);
+      assert.strictEqual(
+        found.range.end.character,
+        doc.lineAt(1).text.length,
+        'line end (whole method line)',
+      );
+      assert.strictEqual(found.severity, vscode.DiagnosticSeverity.Warning);
+    });
+
+    test('2C.2 double save triggers a single debounced check', async () => {
+      runStub = stubRunner();
+      const uri = await openScratch(
+        'qa520-debounce',
+        'class W\n  def render(name)\n    name\n  end\nend\n',
+      );
+      await waitForDiag(uri);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const editor = vscode.window.activeTextEditor;
+      assert.ok(editor, 'editor should be active');
+      const callsBefore = runStub.callCount;
+      await editor.edit((builder) => {
+        builder.insert(new vscode.Position(0, 0), '# t1\n');
+      });
+      await doc.save();
+      await editor.edit((builder) => {
+        builder.insert(new vscode.Position(0, 0), '# t2\n');
+      });
+      await doc.save();
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      assert.strictEqual(
+        runStub.callCount - callsBefore,
+        1,
+        `double save should collapse to one check, got ${runStub.callCount - callsBefore}`,
+      );
+    });
+
+    test('2C.3 clean file yields empty diagnostics and OK status', async () => {
+      runStub = sinon
+        .stub(runner, 'runDocscribe')
+        .resolves(okResult({ stdout: emptyFilesJson(), output: emptyFilesJson() }));
+      const uri = await openScratch(
+        'qa520-clean',
+        '# Adds.\n# @param [Integer] a x\n# @return [Integer] y\ndef add(a)\n  a\nend\n',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      assert.strictEqual(vscode.languages.getDiagnostics(uri).length, 0, 'no diagnostics expected');
+      await vscode.commands.executeCommand('docscribe.checkFile');
+      assert.ok(getStatusBarTextForTesting().includes('OK'));
+    });
+
+    test('2C.5 error severity maps to Error, InvalidType code preserved', async () => {
+      runStub = stubRunner(errorJsonFor);
+      const uri = await openScratch('qa520-sev', 'class W\n  def show(x)\n    x\n  end\nend\n');
+      const diags = await waitForDiag(uri);
+      const found = diags.find((d) => d.code === 'DocScribe/InvalidType');
+      assert.ok(
+        found,
+        `expected InvalidType diagnostic, got: ${JSON.stringify(diags.map((d) => d.code))}`,
+      );
+      assert.strictEqual(found.severity, vscode.DiagnosticSeverity.Error);
+      assert.ok(found.message.includes('Sym bol'));
     });
   });
 });

@@ -44,19 +44,35 @@ export interface RunOptions {
   strategy?: 'check' | 'safe' | 'aggressive' | 'updateTypes';
   /** If true (default), uses `--format json` for machine-readable output. */
   json?: boolean;
+  /**
+   * AbortSignal wired to the VS Code progress Cancel button (card 497).
+   * When aborted, the child process is killed and the result is marked
+   * `cancelled` instead of surfacing as an error.
+   */
+  signal?: AbortSignal;
 }
 
 /**
  * Checks whether the docscribe gem is installed in the current project.
  *
+ * Runs `bundle exec docscribe --version` and requires a clean exit (code 0)
+ * plus a version number on stdout. A bare `success` check is not enough:
+ * bundler exits 1 with "not currently included" when the gem is missing,
+ * and exit 1 means "issues found" (still successful) for docscribe runs —
+ * so exit 1 here must count as *missing* (card 495).
+ *
  * @param cwd - Working directory (project root) to run the check in.
- * @returns true if `bundle exec docscribe --version` succeeds.
+ * @param execFn - Function used to spawn the process (default: `proc.execFile`).
+ * @returns true if the gem reports its version cleanly.
  */
-export async function checkGemInstalled(cwd: string): Promise<boolean> {
+export async function checkGemInstalled(
+  cwd: string,
+  execFn: ExecFunction = proc.execFile,
+): Promise<boolean> {
   const config = vscode.workspace.getConfiguration('docscribe');
   const bundlePath = config.get<string>('bundlePath', 'bundle');
-  const result = await execCommand(bundlePath, ['exec', 'docscribe', '--version'], cwd);
-  return result.success;
+  const result = await execCommand(bundlePath, ['exec', 'docscribe', '--version'], cwd, execFn);
+  return result.exitCode === 0 && /^\d+\.\d+\.\d+/.test(result.stdout.trim());
 }
 
 /**
@@ -72,6 +88,8 @@ export interface RunResult {
   success: boolean;
   /** Whether docscribe found issues (exit code 1). */
   hasIssues: boolean;
+  /** True when the run was cancelled via {@link RunOptions.signal} (card 497). */
+  cancelled: boolean;
   /** Exit code from the process. */
   exitCode: number;
   /** Standard output (JSON when `--format json`). */
@@ -707,10 +725,14 @@ type ExecFunction = (
  * - 1 = issues found (still a "successful" run for the extension)
  * - 2+ = error (process error, file error, etc.)
  *
+ * When `opts.signal` aborts, the child is killed and the result carries
+ * `cancelled: true` (exit code is whatever the abort produced, usually 2).
+ *
  * @param cmd - Command to execute.
  * @param args - Command-line arguments.
  * @param cwd - Working directory for the process.
  * @param execFn - Function used to spawn the process (default: `proc.execFile`).
+ * @param opts - Optional AbortSignal to kill the child on cancellation.
  * @returns A promise resolving to a {@link RunResult}.
  */
 export function execCommand(
@@ -718,14 +740,25 @@ export function execCommand(
   args: string[],
   cwd: string,
   execFn: ExecFunction = proc.execFile,
+  opts?: { signal?: AbortSignal },
 ): Promise<RunResult> {
   return new Promise((resolve) => {
-    execFn(cmd, args, { cwd, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+    // NB: the signal may already be aborted before we subscribe.
+    let cancelled = opts?.signal?.aborted ?? false;
+    const onAbort = (): void => {
+      cancelled = true;
+    };
+    opts?.signal?.addEventListener('abort', onAbort, { once: true });
+    const execOptions: Record<string, unknown> = { cwd, maxBuffer: 10 * 1024 * 1024 };
+    if (opts?.signal) execOptions.signal = opts.signal;
+    execFn(cmd, args, execOptions, (err, stdout, stderr) => {
+      opts?.signal?.removeEventListener('abort', onAbort);
       const output = stderr ? `${stdout}\n${stderr}` : stdout;
       const exitCode = toExitCode(err);
       resolve({
-        success: exitCode < 2,
-        hasIssues: exitCode === 1,
+        success: exitCode < 2 && !cancelled,
+        hasIssues: exitCode === 1 && !cancelled,
+        cancelled,
         exitCode,
         stdout,
         stderr,
@@ -755,6 +788,7 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
     return {
       success: false,
       hasIssues: false,
+      cancelled: false,
       exitCode: 1,
       stdout: '',
       stderr: 'No active editor',
@@ -767,6 +801,7 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
     return {
       success: false,
       hasIssues: false,
+      cancelled: false,
       exitCode: 1,
       stdout: '',
       stderr: 'No file path',
@@ -779,6 +814,7 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
     return {
       success: false,
       hasIssues: false,
+      cancelled: false,
       exitCode: 1,
       stdout: '',
       stderr: 'No Gemfile found in project tree',
@@ -846,6 +882,7 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
         return {
           success: true,
           hasIssues: offenseCount > 0,
+          cancelled: false,
           exitCode: offenseCount > 0 ? 1 : 0,
           stdout: result,
           stderr: '',
@@ -871,6 +908,7 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
         return {
           success: ok,
           hasIssues: !ok,
+          cancelled: false,
           exitCode: ut.exit_code,
           stdout,
           stderr: '',
@@ -887,7 +925,9 @@ export async function runDocscribe(options: RunOptions): Promise<RunResult> {
   const bundlePath = config.get<string>('bundlePath', 'bundle');
 
   if (useBundleExec) {
-    return execCommand(bundlePath, ['exec', commandPath, ...args], projectRoot);
+    return execCommand(bundlePath, ['exec', commandPath, ...args], projectRoot, proc.execFile, {
+      signal: options.signal,
+    });
   }
-  return execCommand(commandPath, args, projectRoot);
+  return execCommand(commandPath, args, projectRoot, proc.execFile, { signal: options.signal });
 }

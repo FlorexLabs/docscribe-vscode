@@ -20,6 +20,7 @@ function okResult(overrides: Partial<RunResult> = {}): RunResult {
   return {
     success: true,
     hasIssues: false,
+    cancelled: false,
     exitCode: 0,
     stdout: '',
     stderr: '',

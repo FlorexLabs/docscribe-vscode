@@ -46,7 +46,15 @@ function emptyCheckResult(): RunResult {
     files: [],
     summary: { offense_count: 0, target_file_count: 0, inspected_file_count: 0, error_count: 0 },
   });
-  return { success: true, hasIssues: false, exitCode: 0, stdout, stderr: '', output: stdout };
+  return {
+    success: true,
+    hasIssues: false,
+    cancelled: false,
+    exitCode: 0,
+    stdout,
+    stderr: '',
+    output: stdout,
+  };
 }
 
 async function closeAllEditors(): Promise<void> {
@@ -166,6 +174,33 @@ suite('quickfix apply (QA 2C)', function () {
     await applyFix(uri, diagFor(0, 'Missing YARD documentation for `Qa482Calculator`'), 'safe');
 
     assert.strictEqual(doc.getText(), template);
+  });
+
+  test('per-method fix strips trailing whitespace from inserted lines (card 498)', async () => {
+    const withTrailingWs = fixedAddOnly.replace(
+      '  # @return [Integer] sum\n',
+      '  # @return [Integer] sum  \n  \n',
+    );
+    sandbox.stub(client, 'applyFixViaServer').resolves(withTrailingWs);
+    const { doc, uri } = await openScratch(template);
+
+    await applyFix(uri, diagFor(1, 'Missing YARD documentation for `add`'), 'safe');
+
+    const text = doc.getText();
+    assert.ok(text.includes('# Adds two numbers.'), 'target method should be documented');
+    assert.ok(!/[ \t]+$/m.test(text), 'inserted lines must carry no trailing whitespace');
+  });
+
+  test('fix-all strips trailing whitespace from file output (card 498)', async () => {
+    const withTrailingWs = `${fixedBoth.replace(/\n$/, '')}  \n`;
+    sandbox.stub(client, 'applyFixViaServer').resolves(withTrailingWs);
+    const { doc, uri } = await openScratch(template);
+
+    await applyFix(uri, undefined, 'safe');
+
+    const text = doc.getText();
+    assert.ok(!/[ \t]+$/m.test(text), 'file output must carry no trailing whitespace');
+    assert.ok(text.includes('# Subtracts two numbers.'));
   });
 
   test('no docscribe diagnostics yields no actions', async () => {

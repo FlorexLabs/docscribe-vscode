@@ -67,6 +67,12 @@ suite('docscribeRunner', () => {
       assert.strictEqual(result, null);
     });
 
+    test('returns null for a deleted file instead of throwing (card 519)', () => {
+      const ghost = path.join(tmpDir, 'gone.rb');
+      assert.strictEqual(fs.existsSync(ghost), false);
+      assert.strictEqual(findProjectRoot(ghost), null);
+    });
+
     test('detects Gemfile in the fixtures directory', () => {
       const result = findProjectRoot(fixturesDir);
       assert.strictEqual(result, fs.realpathSync(fixturesDir));

@@ -21,14 +21,26 @@ ocr_json() {
 # assert_ocr <shot-name> <grep-pattern> — screenshots then greps OCR text.
 assert_ocr() {
   shot "$1"
-  if ocr_text | grep -qi "$2"; then
+  if ocr_text | grep -qiE "$2"; then
     return 0
   fi
   echo "OCR miss for /$2/ in $LAST_SHOT" >&2
   return 1
 }
 
-# assert_md5_same <file> <expected-md5>
+# assert_ocr_retry <shot-name> <grep-pattern> [tries=3] — screenshot+grep with settle waits.
+assert_ocr_retry() {
+  local tries="${3:-3}" i
+  for (( i = 1; i <= tries; i++ )); do
+    shot "$1"
+    if ocr_text | grep -qiE "$2"; then
+      return 0
+    fi
+    sleep 4
+  done
+  echo "OCR miss for /$2/ in $LAST_SHOT after $tries tries" >&2
+  return 1
+}
 assert_md5_same() {
   local actual
   actual=$(md5 -q "$1")

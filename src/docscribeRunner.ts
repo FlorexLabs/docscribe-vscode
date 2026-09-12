@@ -110,7 +110,12 @@ export interface RunResult {
  * @returns The project root directory path, or `null` if no Gemfile is found.
  */
 export function findProjectRoot(startPath: string): string | null {
-  let current = fs.realpathSync(startPath);
+  let current: string;
+  try {
+    current = fs.realpathSync(startPath);
+  } catch {
+    return null; // file deleted mid-flight (card 519)
+  }
   for (let i = 0; i < 20; i++) {
     if (fs.existsSync(path.join(current, 'Gemfile'))) {
       return current;

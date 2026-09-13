@@ -38,6 +38,21 @@ interface JsonOutput {
   };
 }
 
+/**
+ * Clamp a 1-based offense line into a valid 0-based document line.
+ *
+ * Daemon/CLI line numbers may exceed the document (stale cache,
+ * rewritten-output counting). `document.lineAt` throws on out-of-range
+ * and would drop the whole file's diagnostics (proven 2026-09-13, 2e5).
+ *
+ * @param line - 1-based line from the offense.
+ * @param lineCount - Total lines in the document.
+ * @returns 0-based line within `[0, lineCount - 1]`.
+ */
+export function clampLine(line: number, lineCount: number): number {
+  return Math.min(Math.max(0, line - 1), Math.max(0, lineCount - 1));
+}
+
 interface FileDiagnostics {
   issues: {
     line: number;
@@ -160,7 +175,7 @@ export async function checkDocument(document: vscode.TextDocument): Promise<RunR
   }
 
   const diagnostics: vscode.Diagnostic[] = fileDiagnostics.issues.map((issue) => {
-    const line = Math.max(0, issue.line - 1);
+    const line = clampLine(issue.line, document.lineCount);
     const range = new vscode.Range(line, 0, line, document.lineAt(line).text.length);
     const severity =
       issue.severity === 'fatal' || issue.severity === 'error'

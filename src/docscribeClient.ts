@@ -400,13 +400,40 @@ function changeSource(change: unknown): ChangeSource | undefined {
   return source === 'rbs' || source === 'infer' || source === 'syntax' ? source : undefined;
 }
 
+function changeMessage(change: unknown): string {
+  if (typeof change === 'object' && change !== null) {
+    const message = (change as Record<string, unknown>)['message'];
+    if (typeof message === 'string' && message) return message;
+  }
+  return 'Missing YARD documentation';
+}
+
+/**
+ * Daemon change `type` to offense cop/severity. Mirrors the CLI
+ * `--format json` contract (gem `1.6.2`): `invalid_type` is
+ * `Docscribe/InvalidType` (warning), `missing_return` is
+ * `Docscribe/MissingReturn`; everything else stays
+ * `DocScribe/MissingDocumentation` (convention).
+ */
+function changeCop(change: unknown): { copName: string; severity: string } {
+  const type =
+    typeof change === 'object' && change !== null
+      ? (change as Record<string, unknown>)['type']
+      : undefined;
+  if (type === 'invalid_type') return { copName: 'Docscribe/InvalidType', severity: 'warning' };
+  if (type === 'missing_return')
+    return { copName: 'Docscribe/MissingReturn', severity: 'convention' };
+  return { copName: 'DocScribe/MissingDocumentation', severity: 'convention' };
+}
+
 function changeToOffense(change: unknown): Record<string, unknown> {
   const line = changeLine(change);
   const source = changeSource(change);
+  const { copName, severity } = changeCop(change);
   return {
-    severity: 'convention',
-    cop_name: 'DocScribe/MissingDocumentation',
-    message: 'Missing YARD documentation',
+    severity,
+    cop_name: copName,
+    message: changeMessage(change),
     corrected: false,
     correctable: true,
     ...(source ? { source } : {}),

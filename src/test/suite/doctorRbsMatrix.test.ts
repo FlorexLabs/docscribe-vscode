@@ -17,6 +17,7 @@ import { checkMissingRbsGem, resetRbsBalloonForTesting } from '../../extension';
 import {
   buildRbsCliOverrides,
   gemfileHasRbs,
+  hasCollection,
   hasRbsInLock,
   hasSigFiles,
   readExplicitRbsEnabled,
@@ -269,6 +270,18 @@ suite('doctorRbsMatrix (QA 2D/2E/2H)', () => {
         fs.rmSync(root, { recursive: true, force: true });
       }
     });
+
+    test('collection alone is not an enable signal (pending decision 523)', () => {
+      const root = makeRoot();
+      try {
+        writeFile(root, 'Gemfile', 'source "https://rubygems.org"\ngem "docscribe"\n');
+        writeFile(root, 'rbs_collection.lock.yaml', 'sources: []\n');
+        assert.strictEqual(hasCollection(root), true);
+        assert.strictEqual(shouldUseRbs(root, false), false);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   suite('buildRbsCliOverrides', () => {
@@ -367,6 +380,20 @@ suite('doctorRbsMatrix (QA 2D/2E/2H)', () => {
         fs.rmSync(root, { recursive: true, force: true });
       }
     });
+
+    test('useRbs setting without signals stays off (validate still flows)', () => {
+      const root = makeRoot();
+      try {
+        writeFile(root, 'Gemfile', 'source "https://rubygems.org"\ngem "docscribe"\n');
+        stubDoctorConfig({ useRbs: true, validateTypes: true });
+        const ctx = resolveRbsContext(root, parseCapabilities('1.6.2'));
+        assert.strictEqual(ctx.useRbs, false);
+        assert.strictEqual(ctx.collection, false);
+        assert.deepStrictEqual(ctx.overrides, { validate_types: true });
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   suite('validateTypes CLI flags via runDocscribe', () => {
@@ -429,6 +456,45 @@ suite('doctorRbsMatrix (QA 2D/2E/2H)', () => {
         await runDocscribe({ file, strategy: 'check', json: true });
         assert.strictEqual(captured.length, 1);
         assert.deepStrictEqual(captured[0].args, ['--format', 'json', file]);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('safe with RBS behaves like aggressive (-A -k --rbs, QA 2E.3)', async () => {
+      const root = makeRoot();
+      try {
+        writeFile(root, 'Gemfile', 'source "https://rubygems.org"\n');
+        writeFile(root, 'sig/a.rbs', 'class A end\n');
+        const file = path.join(root, 'lib', 'a.rb');
+        writeFile(root, path.join('lib', 'a.rb'), 'class A end\n');
+        stubDoctorConfig({ useRbs: true, validateTypes: false, useServer: false });
+        const captured: CapturedCall[] = [];
+        stubExec({ version: '1.6.2', mainStdout: 'updated 1 file\n', captured });
+        await runDocscribe({ file, strategy: 'safe' });
+        assert.strictEqual(captured.length, 1);
+        assert.ok(captured[0].args.includes('-A'));
+        assert.ok(captured[0].args.includes('-k'));
+        assert.ok(captured[0].args.includes('--rbs'));
+        assert.ok(!captured[0].args.includes('-a'));
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('safe without RBS stays on (-a, no --rbs)', async () => {
+      const root = makeRoot();
+      try {
+        writeFile(root, 'Gemfile', 'source "https://rubygems.org"\n');
+        const file = path.join(root, 'lib', 'a.rb');
+        writeFile(root, path.join('lib', 'a.rb'), 'class A end\n');
+        stubDoctorConfig({ useRbs: true, validateTypes: false, useServer: false });
+        const captured: CapturedCall[] = [];
+        stubExec({ version: '1.6.2', mainStdout: 'updated 1 file\n', captured });
+        await runDocscribe({ file, strategy: 'safe' });
+        assert.strictEqual(captured.length, 1);
+        assert.ok(captured[0].args.includes('-a'));
+        assert.ok(!captured[0].args.includes('--rbs'));
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
@@ -882,6 +948,131 @@ suite('doctorRbsMatrix (QA 2D/2E/2H)', () => {
       } finally {
         restoreDocs();
         restoreFolders();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('silent when useRbs false (QA 2E.4)', async () => {
+      const root = makeRoot();
+      const gemfile = path.join(root, 'Gemfile');
+      fs.writeFileSync(gemfile, 'source "https://rubygems.org"\ngem "docscribe"\n');
+      stubConfig({ useRbs: false, useBundleExec: true, bundlePath: 'bundle' });
+      const restoreFolders = fakeWorkspace(root);
+      const restoreDocs = setWorkspaceProp('textDocuments', []);
+      try {
+        const warn = sinon.stub(vscode.window, 'showWarningMessage') as unknown as sinon.SinonStub;
+        warn.resolves('Add rbs to Gemfile');
+        resetRbsBalloonForTesting();
+        checkMissingRbsGem(root);
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        assert.strictEqual(warn.callCount, 0);
+      } finally {
+        restoreDocs();
+        restoreFolders();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('silent when rbs already in Gemfile (QA 2E.4)', async () => {
+      const root = makeRoot();
+      const gemfile = path.join(root, 'Gemfile');
+      fs.writeFileSync(gemfile, 'source "https://rubygems.org"\ngem "docscribe"\ngem "rbs"\n');
+      stubConfig({ useRbs: true, useBundleExec: true, bundlePath: 'bundle' });
+      const restoreFolders = fakeWorkspace(root);
+      const restoreDocs = setWorkspaceProp('textDocuments', []);
+      try {
+        const warn = sinon.stub(vscode.window, 'showWarningMessage') as unknown as sinon.SinonStub;
+        warn.resolves('Add rbs to Gemfile');
+        resetRbsBalloonForTesting();
+        checkMissingRbsGem(root);
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        assert.strictEqual(warn.callCount, 0);
+      } finally {
+        restoreDocs();
+        restoreFolders();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('dismiss leaves Gemfile untouched (QA 2E.4)', async () => {
+      const root = makeRoot();
+      const gemfile = path.join(root, 'Gemfile');
+      const base = 'source "https://rubygems.org"\ngem "docscribe"\n';
+      fs.writeFileSync(gemfile, base);
+      stubConfig({ useRbs: true, useBundleExec: true, bundlePath: 'bundle' });
+      const restoreFolders = fakeWorkspace(root);
+      const restoreDocs = setWorkspaceProp('textDocuments', []);
+      try {
+        const warn = sinon.stub(vscode.window, 'showWarningMessage') as unknown as sinon.SinonStub;
+        warn.resolves(undefined);
+        const info = sinon.stub(
+          vscode.window,
+          'showInformationMessage',
+        ) as unknown as sinon.SinonStub;
+        info.resolves(undefined);
+        resetRbsBalloonForTesting();
+        checkMissingRbsGem(root);
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        assert.strictEqual(warn.callCount, 1);
+        assert.strictEqual(fs.readFileSync(gemfile, 'utf8'), base);
+        assert.strictEqual(info.callCount, 0);
+      } finally {
+        restoreDocs();
+        restoreFolders();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('cannot read Gemfile errors without throwing (QA 2E.4)', async () => {
+      const root = makeRoot();
+      const gemfile = path.join(root, 'Gemfile');
+      fs.writeFileSync(gemfile, 'source "https://rubygems.org"\ngem "docscribe"\n');
+      fs.chmodSync(gemfile, 0o000);
+      stubConfig({ useRbs: true, useBundleExec: true, bundlePath: 'bundle' });
+      const restoreFolders = fakeWorkspace(root);
+      const restoreDocs = setWorkspaceProp('textDocuments', []);
+      try {
+        const warn = sinon.stub(vscode.window, 'showWarningMessage') as unknown as sinon.SinonStub;
+        warn.resolves('Add rbs to Gemfile');
+        const err = sinon.stub(vscode.window, 'showErrorMessage') as unknown as sinon.SinonStub;
+        err.resolves(undefined);
+        resetRbsBalloonForTesting();
+        checkMissingRbsGem(root);
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        assert.strictEqual(warn.callCount, 1);
+        assert.strictEqual(err.callCount, 1);
+        assert.ok(String(err.firstCall.args[0]).includes('cannot read Gemfile'));
+      } finally {
+        restoreDocs();
+        restoreFolders();
+        fs.chmodSync(gemfile, 0o644);
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('cannot write Gemfile errors without throwing (QA 2E.4)', async () => {
+      const root = makeRoot();
+      const gemfile = path.join(root, 'Gemfile');
+      fs.writeFileSync(gemfile, 'source "https://rubygems.org"\ngem "docscribe"\n');
+      fs.chmodSync(gemfile, 0o444);
+      stubConfig({ useRbs: true, useBundleExec: true, bundlePath: 'bundle' });
+      const restoreFolders = fakeWorkspace(root);
+      const restoreDocs = setWorkspaceProp('textDocuments', []);
+      try {
+        const warn = sinon.stub(vscode.window, 'showWarningMessage') as unknown as sinon.SinonStub;
+        warn.resolves('Add rbs to Gemfile');
+        const err = sinon.stub(vscode.window, 'showErrorMessage') as unknown as sinon.SinonStub;
+        err.resolves(undefined);
+        resetRbsBalloonForTesting();
+        checkMissingRbsGem(root);
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        assert.strictEqual(warn.callCount, 1);
+        assert.strictEqual(err.callCount, 1);
+        assert.ok(String(err.firstCall.args[0]).includes('cannot write Gemfile'));
+      } finally {
+        restoreDocs();
+        restoreFolders();
+        fs.chmodSync(gemfile, 0o644);
         fs.rmSync(root, { recursive: true, force: true });
       }
     });

@@ -121,6 +121,50 @@ suite('docscribeClient', () => {
       const parsed = JSON.parse(json);
       assert.strictEqual(parsed.files[0].offenses[0].location.start_line, 1);
     });
+
+    test('maps invalid_type to Docscribe/InvalidType with daemon message', () => {
+      const json = changesToCheckJson('/tmp/vt-stand/bad.rb', [
+        {
+          type: 'invalid_type',
+          file: '/tmp/vt-stand/bad.rb',
+          line: 19,
+          method: 'Widget#foo',
+          message: 'invalid YARD type [NotAType123] for @param x',
+          param: 'x',
+          source: 'syntax',
+        },
+      ]);
+      const parsed = JSON.parse(json);
+      const offense = parsed.files[0].offenses[0];
+      assert.strictEqual(offense.cop_name, 'Docscribe/InvalidType');
+      assert.strictEqual(offense.severity, 'warning');
+      assert.strictEqual(offense.message, 'invalid YARD type [NotAType123] for @param x');
+      assert.strictEqual(offense.location.start_line, 19);
+      assert.strictEqual(offense.source, 'syntax');
+    });
+
+    test('maps missing_return to Docscribe/MissingReturn', () => {
+      const json = changesToCheckJson('/tmp/vt-stand/bad.rb', [
+        {
+          type: 'missing_return',
+          file: '/tmp/vt-stand/bad.rb',
+          line: 19,
+          message: 'missing @return',
+        },
+      ]);
+      const parsed = JSON.parse(json);
+      const offense = parsed.files[0].offenses[0];
+      assert.strictEqual(offense.cop_name, 'Docscribe/MissingReturn');
+      assert.strictEqual(offense.message, 'missing @return');
+    });
+
+    test('falls back to MissingDocumentation message for messageless changes', () => {
+      const json = changesToCheckJson('/tmp/x.rb', [{ type: 'insert_full_doc_block', line: 2 }]);
+      const parsed = JSON.parse(json);
+      const offense = parsed.files[0].offenses[0];
+      assert.strictEqual(offense.cop_name, 'DocScribe/MissingDocumentation');
+      assert.strictEqual(offense.message, 'Missing YARD documentation');
+    });
   });
 
   suite('socketPath', () => {

@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseJsonOutput } from '../../diagnosticProvider';
+import { parseJsonOutput, clampLine } from '../../diagnosticProvider';
 
 const fixturesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'test', 'suite', 'fixtures');
 
@@ -142,6 +142,21 @@ suite('diagnosticProvider', () => {
       assert.strictEqual(file.issues[0].copName, 'Docscribe/InvalidType');
       assert.strictEqual(file.issues[0].severity, 'warning');
       assert.strictEqual(file.issues[0].line, 3);
+    });
+  });
+
+  suite('clampLine', () => {
+    test('converts 1-based to 0-based within range', () => {
+      assert.strictEqual(clampLine(3, 8), 2);
+    });
+
+    test('clamps out-of-range lines to the last line (2e5 lineAt crash)', () => {
+      assert.strictEqual(clampLine(19, 8), 7);
+    });
+
+    test('clamps zero and negative lines to zero', () => {
+      assert.strictEqual(clampLine(0, 8), 0);
+      assert.strictEqual(clampLine(-4, 8), 0);
     });
   });
 });

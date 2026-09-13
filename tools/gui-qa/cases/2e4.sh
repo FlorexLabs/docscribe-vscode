@@ -16,7 +16,8 @@ SET="$HOME/Library/Application Support/Code/User/settings.json"
 mk_norbs_stand || return 1
 trust_off
 trap 'trust_restore' EXIT
-fresh_window "$NORBS_STAND" || return 1
+fresh_window_checked "$NORBS_STAND" "norbs-stand" || return 1
+front_window "v norbs-stand" || return 1
 open_file "$NORBS_STAND/probe.rb"
 palette_run "Reload Window"
 

@@ -20,11 +20,9 @@ _rbs_probe "$MPROJ"
 _rbs_bundle "$MPROJ" || return 1
 
 trust_off
-fresh_window "$MPROJ"
+trap 'trust_restore' EXIT
+fresh_window_checked "$MPROJ" "rbs-mproj" || return 1
 escape
-shot "2e1-root"
-ocr_text | grep -q "rbs-mproj" \
-  || { echo "not in matrix project" >&2; trust_restore; return 1; }
 
 # s1: only sig/
 mkdir -p "$MPROJ/sig"
@@ -85,7 +83,7 @@ mkdir -p "$MPROJ/sig"
 printf 'class Probe\n  def hello: (String name) -> String\nend\n' > "$MPROJ/sig/probe.rbs"
 python3 -c "import json; p='$SET'; d=json.load(open(p)); d['docscribe.useRbs']=False; json.dump(d, open(p,'w'))"
 docstate "2e1-s8" 'RBS.? *disabled' 'heuristic'; rc=$?
+# Always restore the surgical toggle (trap covers trust only).
 python3 -c "import json; b=json.load(open('/tmp/gui-qa-settings.bak')); json.dump(b, open('$SET','w'))"
-trust_restore
 [[ $rc -eq 0 ]] || return 1
 return 0

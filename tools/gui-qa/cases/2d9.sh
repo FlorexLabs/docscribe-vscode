@@ -7,6 +7,7 @@ SET="$HOME/Library/Application Support/Code/User/settings.json"
 
 activate
 cp "$SET" /tmp/gui-qa-settings.bak
+trap 'cp /tmp/gui-qa-settings.bak "$SET"' EXIT
 cat > /tmp/gui-bundle-wrap.sh <<'WRAP'
 #!/bin/zsh
 echo CUSTOM-BUNDLE >> /tmp/gui-bundle-probe.log

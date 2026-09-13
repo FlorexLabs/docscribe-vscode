@@ -9,6 +9,7 @@ SET="$HOME/Library/Application Support/Code/User/settings.json"
 mkdir -p /tmp/qempty
 printf 'hello\n' > /tmp/qempty/note.txt
 cp "$SET" /tmp/gui-qa-settings.bak
+trap 'cp /tmp/gui-qa-settings.bak "$SET"' EXIT
 python3 -c "import json; p='$SET'; d=json.load(open(p)); d['security.workspace.trust.enabled']=False; json.dump(d, open(p,'w'))"
 activate
 osascript -e 'tell application "System Events" to keystroke "w" using {command down, shift down}'
@@ -21,8 +22,6 @@ sleep 4
 palette_run "DocScribe: Doctor"
 rc=0
 assert_ocr "2a2" "Not found" || rc=1
-cp /tmp/gui-qa-settings.bak "$SET"
-close_window
 code --reuse-window "$HOME/qa-stand" >/dev/null 2>&1
 sleep 2
 return $rc

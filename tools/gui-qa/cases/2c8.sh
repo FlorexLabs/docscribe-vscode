@@ -9,9 +9,11 @@ printf 'def broken(\n' > "$STAND/gui-broken.rb"
 open_file "$STAND/gui-undoc.rb"
 mkstand
 palette_run "DocScribe: Check entire workspace"
-problems
+# Honest oracle: workspace results render ONLY to Output → DocScribe
+# (showResult; Problems stays single-file). The old fullscreen grep
+# false-greened on the stale explorer entry (proven 2026-09-13: panel
+# never listed the file). panelhunt confines to the Output area.
+panelhunt "2c8" "gui-broken" || { rm -f "$STAND/gui-broken.rb"; rmstand; return 1; }
 rm -f "$STAND/gui-broken.rb"
 rmstand
-shot "2c8"
-ocr_text | grep -qiE "gui-broken|error|Error" || return 1
 return 0

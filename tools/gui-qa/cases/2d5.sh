@@ -7,11 +7,11 @@ SET="$HOME/Library/Application Support/Code/User/settings.json"
 
 activate
 cp "$SET" /tmp/gui-qa-settings.bak
+trap 'cp /tmp/gui-qa-settings.bak "$SET"' EXIT
 python3 -c "import json; p='$SET'; d=json.load(open(p)); d['docscribe.useServer']=False; json.dump(d, open(p,'w'))"
 open_file "$STAND/clean.rb"
 palette_run "DocScribe: Check current file"
 palette_run "DocScribe: Doctor"
-cp /tmp/gui-qa-settings.bak "$SET"
 pageup 4
 assert_ocr "2d5-top" "Server mode: Available" || return 1
 pagedown 2

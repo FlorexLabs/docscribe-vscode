@@ -17,5 +17,9 @@ sleep 2
 activate
 palette_run "Reload Window"
 sleep 4
-assert_ocr "2a5" "not found" || return 1
+assert_ocr "2a5" "not found" || { code --reuse-window "$HOME/qa-stand" >/dev/null 2>&1; return 1; }
+# Restore the base window: --reuse-window hijacked front to the nogem
+# project; the next case must start from qa-stand.
+code --reuse-window "$HOME/qa-stand" >/dev/null 2>&1
+sleep 2
 return 0

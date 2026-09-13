@@ -18,5 +18,9 @@ palette_run "DocScribe: Check current file"
 problems
 rm -f "$STAND/gui-badtype.rb"
 rmstand
-assert_ocr_retry "2c5" "gui-badtype" 2 || return 1
+# Panel-confined: the editor tab title "gui-badtype.rb" would false-green a
+# fullscreen grep even with an empty Problems panel (proven 2026-09-13).
+shot "2c5"
+ocr_text | grep -qi "Problems" || { echo "problems view not open" >&2; return 1; }
+panel_grep "$LAST_SHOT" "gui-badtype" || return 1
 return 0

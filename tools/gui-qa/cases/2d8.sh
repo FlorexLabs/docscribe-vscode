@@ -23,5 +23,7 @@ fi
 nohup open -a "Visual Studio Code" --args "$STAND" >/dev/null 2>&1 </dev/null &
 sleep 8
 shot "2d8"
-ocr_text | grep -qi "qa-stand" || return 1
+# Deterministic oracle: process argv carries the folder. OCR "qa-stand" is
+# too weak (any stand window matches, proven 2026-09-13).
+code --status 2>/dev/null | grep -q "qa-stand" || return 1
 return 0

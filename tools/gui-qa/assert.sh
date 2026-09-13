@@ -78,6 +78,21 @@ print('\n'.join(hits))
 sys.exit(0 if hits else 1)
 "
 }
+# panelhunt <tag> <pattern> [max=12] — dochunt confined to the panel area.
+# dochunt greps fullscreen (explorer/tab titles false-green, proven 2c8);
+# panelhunt greps below the panel tab row only. Needs actions.sh sourced.
+panelhunt() {
+  local max="${3:-12}" i
+  pageup 8
+  for (( i = 1; i <= max; i++ )); do
+    shot "$1-p$i"
+    if panel_grep "$LAST_SHOT" "$2"; then
+      return 0
+    fi
+    down 3
+  done
+  echo "panel miss for /$2/ ($1)" >&2; return 1
+}
 # dochunt <tag> <pattern> [forbidden] [max=12] — walk the Output panel down
 # from the top with overlapping down-arrow steps (page steps can straddle a
 # 1-line target exactly on the viewport boundary). Needs actions.sh sourced.

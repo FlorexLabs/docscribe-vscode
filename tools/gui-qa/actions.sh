@@ -55,8 +55,15 @@ escape() {
 }
 
 save() {
-  osascript -e 'tell application "System Events" to keystroke "s" using command down'
-  sleep 1.5
+  # NOTE: Cmd+S via keystroke is DEAD in this VM (proven 2026-09-13: ignored
+  # even with editor focus). Palette Save is the only working save path.
+  palette_run "File: Save"
+}
+
+# window_count — number of open VSCode windows via `code --status`.
+# osascript window counting hangs headless; --status never does.
+window_count() {
+  code --status 2>/dev/null | grep -c -o "window \[[0-9]*\]"
 }
 
 # click_text <shot-png> <grep-pattern> — click first OCR match center (retina-aware).
@@ -110,14 +117,16 @@ up() {
     sleep 0.2
   done
 }
-# close_window — Cmd+Shift+W (caller must ensure no dirty tabs: hot exit covers the rest).
+# close_window — DEAD in this VM (Cmd+Shift+W ignored like all single-letter
+# Cmd+keystrokes, proven 2026-09-13). Kept for fresh_window structure; window
+# cleanup happens via pre-run pkill in run.sh, NOT here. Do not rely on it.
 close_window() {
   osascript -e 'tell application "System Events" to keystroke "w" using {command down, shift down}'
   sleep 2
 }
-# close_editor — Cmd+W closes the active editor tab (file must be saved).
-# Needed before Problems-absence shots: editor source text would match the
-# forbidden pattern fullscreen (proven 2026-09-13, 2e5-off false red).
+# close_editor — DEAD in this VM (Cmd+W ignored, proven 2026-09-13; focus
+# tricks and click_text on the × do not help). Kept as harmless no-op.
+# Oracles must be panel-confined (panel_grep), never depend on closed tabs.
 close_editor() {
   osascript -e 'tell application "System Events" to keystroke "w" using command down'
   sleep 1
@@ -160,10 +169,13 @@ front_window() {
 # 2026-09-13: ignored even with editor focus), but palette commands and
 # key codes work. Types a space (harmless trailing whitespace) and saves
 # via palette, which fires onDidSaveTextDocument -> auto-check.
+# NOTE: leaves a trailing space in the file; fixtures are recreated per
+# case (mk*), so no cross-run dirt. Prefer palette Check commands when the
+# file content must stay byte-clean.
 touch_check() {
   osascript -e 'tell application "System Events" to key code 49'
   sleep 1
-  palette_run "File: Save"
+  save
 }
 # palette_run_until_log <command> <log> <before> [tries=3] — rerun the palette
 # command until the log fingerprint changes. Covers the post-open activation

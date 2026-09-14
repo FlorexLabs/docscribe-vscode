@@ -8,8 +8,9 @@ RBS_STAND="${RBS_STAND:-/tmp/rbs-stand}"
 mk_rbs_stand || return 1
 trust_off
 trap 'trust_restore' EXIT
-fresh_window_checked "$RBS_STAND" "rbs-stand" || return 1
-front_window "v rbs-stand" || return 1
+window_gate "$RBS_STAND" || return 1
+trust_on "$RBS_STAND" || return 1
+# (front_window superseded by window_gate above)
 escape
 open_file "$RBS_STAND/widget.rb"
 log=$(docscribe_log)

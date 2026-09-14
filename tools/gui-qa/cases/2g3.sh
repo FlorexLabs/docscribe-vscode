@@ -7,35 +7,23 @@ source "$(dirname "$0")/../assert.sh"
 mk_ws_stand || return 1
 trust_off
 trap 'trust_restore' EXIT
-fresh_window_checked "$WS_STAND" "ws-stand" || return 1
-front_window "v ws-stand" || return 1
+window_gate "$WS_STAND" || return 1
+trust_on "$WS_STAND" || return 1
+# (front_window superseded by window_gate above)
 escape
-# Write .gitignore BEFORE opening anything: the extension computes the
-# file list at check time from current disk state, and open_file's
-# --reuse-window focus can trigger an auto-check on the PRE-gitignore list
-# whose Output then satisfies nothing (proven 2026-09-14: hunts scanned a
-# 3-file JSON that predated the .gitignore write). Sleep past the mtime
-# granularity: the daemon keys results by (file, strategy, mtime) at
-# 1-SECOND granularity, and mk_ws_stand recreates fixtures within the same
-# second as the previous case's check — identical mtimes serve STALE
-# results missing fresh files (proven 2026-09-14: keep.rb absent from a
-# 4-file batch until the second tick).
+# Write .gitignore BEFORE opening anything: the file list is computed at
+# check time from disk. (Earlier theories about daemon mtime-staleness
+# were wrong — the batch answers per requested file; the real failure was
+# window focus, now fenced by window_gate. The sleeps/pkill below stay as
+# cheap belt-and-suspenders.)
 printf 'gen/\n!gen/keep.rb\n' > "$WS_STAND/.gitignore"
 printf 'lib/\n' > "$WS_STAND/gen/.gitignore"
 sleep 2
-open_file "$WS_STAND/lib/a.rb"
-# Belt and suspenders vs the daemon file_cache: the daemon keys results by
-# (file, strategy, mtime, sig_hash) and CANNOT see .gitignore edits (it
-# reuses per-file results when only the ignore set changed — proven
-# 2026-09-14: keep.rb stayed out of Output until daemon restart). Bounce
-# the daemon so the batch runs on the current file list; the file list
-# itself is computed fresh by the extension on every check.
+# No open_file before the workspace check: opening a file can trigger an
+# auto-check whose Output then satisfies nothing (same trap as 2g5, proven
+# 2026-09-14). Workspace check needs no active editor.
 pkill -9 -f "docscribe server" 2>/dev/null
 sleep 2
-# Sleep past the daemon mtime granularity (1 second): recreated fixtures
-# share mtimes with the previous case's cached results otherwise (proven
-# 2026-09-14, 2g3). The pkill above cannot help — the NEW daemon re-reads
-# the same mtimes and re-serves stale entries.
 sleep 2
 palette_run "DocScribe: Check entire workspace"
 # Negated file survives...

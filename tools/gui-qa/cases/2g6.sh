@@ -14,8 +14,9 @@ pkill -9 -f "docscribe server" 2>/dev/null
 sleep 2
 trust_off
 trap 'trust_restore' EXIT
-fresh_window_checked "$WS_STAND" "ws-stand" || return 1
-front_window "v ws-stand" || return 1
+window_gate "$WS_STAND" || return 1
+trust_on "$WS_STAND" || return 1
+# (front_window superseded by window_gate above)
 escape
 open_file "$WS_STAND/lib/a.rb"
 palette_run "DocScribe: Check entire workspace"

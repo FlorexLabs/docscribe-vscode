@@ -13,6 +13,8 @@ activate
 mkstand
 trust_off
 trap 'trust_restore' EXIT
+window_gate "$STAND" || return 1
+trust_on "$STAND" || return 1
 printf 'def foo(' > "$STAND/gui-syntax.rb"
 open_file "$STAND/gui-syntax.rb"
 touch_check

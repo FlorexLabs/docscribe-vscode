@@ -45,7 +45,10 @@ found=0
 for (( i = 1; i <= 4; i++ )); do
   pagedown 1
   shot "2d9-$i"
-  if ocr_text | grep -qi "Locale:.*en_US.UTF-8"; then
+  # NOTE: OCR wraps the long row as "en_US. UTF-8" (space after the dot;
+  # proven 2026-09-14: full10 2d9 red while the value was correct), so the
+  # pattern tolerates the wrap. The -609 blip in the same run recovered.
+  if ocr_text | grep -qiE "Locale:.*en_US\.? *UTF-8"; then
     found=1
     cp "$SHOT_DIR/2d9-$i.png" "$SHOT_DIR/2d9.png"
     break

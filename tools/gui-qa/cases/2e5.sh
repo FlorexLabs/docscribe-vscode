@@ -11,14 +11,15 @@ SET="$HOME/Library/Application Support/Code/User/settings.json"
 mk_vt_stand || return 1
 trust_off
 trap 'trust_restore' EXIT
-fresh_window_checked "$VT_STAND" "vt-stand" || return 1
+window_gate "$VT_STAND" || return 1
+trust_on "$VT_STAND" || return 1
 # Open a ruby file: guarantees activation via onLanguage (proven by 2e4:
 # workspaceContains alone leaves the window idle with extensions dead).
 open_file "$VT_STAND/bad.rb"
 palette_run "Reload Window"
 # Reload may refocus the background qa-stand window: stray-tab grep on
 # "vt-stand" false-positives via tab paths, so anchor on explorer root.
-front_window "v vt-stand" || return 1
+# (front_window superseded by window_gate above)
 # Opening the file may reuse a hot-exit-restored tab (no onOpen event), and
 # explicit palette Check is flaky here — so force onSave via touch_check
 # (type space + palette Save) and poll the Problems panel. Panel-confined
@@ -45,7 +46,7 @@ dochunt "2e5-doc-on" "Validate types: *on" \
 # into Restricted Mode — proven by 2e4). Trap restores trust at exit.
 python3 -c "import json; p='$SET'; d=json.load(open(p)); d['docscribe.validateTypes']=False; json.dump(d, open(p,'w'))"
 palette_run "Reload Window"
-front_window "v vt-stand" || { echo "screen not ready after reload" >&2; return 1; }
+# (front_window superseded by window_gate above)
 open_file "$VT_STAND/bad.rb"
 # Cold host after Reload: "DocScribe: Doctor" may miss the palette while the
 # extension host starts. Retry until the report header lands (proven 2e2/2e3

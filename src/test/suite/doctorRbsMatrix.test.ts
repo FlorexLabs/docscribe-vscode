@@ -312,6 +312,18 @@ suite('doctorRbsMatrix (QA 2D/2E/2H)', () => {
         validate_types: true,
       });
     });
+
+    test('forwards no_boilerplate alone (card 557)', () => {
+      assert.deepStrictEqual(buildRbsCliOverrides(false, false, false, true), {
+        no_boilerplate: true,
+      });
+      assert.deepStrictEqual(buildRbsCliOverrides(true, true, true, true), {
+        rbs: true,
+        rbs_collection: true,
+        validate_types: true,
+        no_boilerplate: true,
+      });
+    });
   });
 
   suite('resolveRbsContext', () => {
@@ -804,32 +816,6 @@ suite('doctorRbsMatrix (QA 2D/2E/2H)', () => {
         restoreFolders();
         fs.rmSync(root, { recursive: true, force: true });
       }
-    });
-
-    test('doctor channel name avoids results-channel collision (card 556)', () => {
-      // The results channel is 'DocScribe'; the Doctor channel must NOT be
-      // a string that VS Code's channel picker can confuse with it.
-      // 'DocScribe Doctor' collided (substring/prefix match): Doctor output
-      // hijacked the results channel and stale workspace JSON haunted later
-      // driver oracles (proven 2026-09-14: 2g3). Pinned statically.
-      const extSrc = fs.readFileSync(
-        path.resolve(__dirname, '..', '..', '..', 'src', 'extension.ts'),
-        'utf8',
-      );
-      const m = extSrc.match(/createOutputChannel\('([^']+)'\)/g) || [];
-      const names = m.map((s) => s.slice(20, -2));
-      assert.ok(names.includes('DocScribe'), 'results channel exists');
-      for (const n of names) {
-        if (n === 'DocScribe') continue;
-        assert.ok(
-          !n.startsWith('DocScribe ') && !'DocScribe '.startsWith(n),
-          `channel '${n}' collides with results channel 'DocScribe'`,
-        );
-      }
-      assert.ok(
-        names.some((n) => n.includes('Doctor')),
-        'a Doctor channel still exists',
-      );
     });
 
     test('disabled RBS bare string with CLI fallback backend', async () => {

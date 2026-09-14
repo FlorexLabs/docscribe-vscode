@@ -145,31 +145,41 @@ pathhunt() {
 # Same wrap/fragmentation problem as pathhunt: a forbidden single-grep for
 # "spec/b_spec" never fires even when the file IS present split across two
 # lines ("spec/" + "b_spec"), so leaks pass silently (proven 2026-09-14:
-# 2g-absence oracles were vacuous). Fails when ALL stem segments co-occur
-# in one viewport. Needs actions.sh sourced.
+# 2g-absence oracles were vacuous).
+# Fails only on a REAL reassembly: strip every non-alphanumeric char from
+# the panel text below the tab anchor and search the joined CLASSNAME +
+# EXTENSION ("genc", "b_spec" -> "bspec"). Single letters can no longer
+# false-fire: "gen"+ANY "c" matched inside gen/keep.rb's own row (proven
+# 2026-09-14: 2g3-a1 fired on keep.rb + "convention"[c] 3 lines apart),
+# while "genc" only matches a literal gen/c.rb path. Underscores survive
+# (spec/b_spec); dots/dashes/slashes are dropped on both sides.
+# Needs actions.sh sourced.
 path_absent() {
-  local max="${3:-12}" i seg found
+  local max="${3:-12}" i
   panel_top "$1-top" "docscribe_version"
   for (( i = 1; i <= max; i++ )); do
     shot "$1-a$i"
-    found=1
-    for seg in $(echo "$2" | tr '/' ' '); do
-      if ! panel_grep "$LAST_SHOT" "$seg" >/dev/null 2>&1; then
-        found=0; break
-      fi
-    done
-    if [[ $found -eq 1 ]]; then
+    if ~/qa-vm-bin/vocr "$LAST_SHOT" 2>/dev/null | python3 -c "
+import json,sys,re
+d = json.load(sys.stdin)
+tabs = {'problems', 'output', 'debug console', 'terminal', 'test results'}
+tops = [o['y'] for o in d if o['text'].strip().lower() in tabs]
+if not tops:
+    sys.exit(2)
+anchor = max(tops)
+text = ' '.join(o['text'] for o in d if o['y'] > anchor)
+flat = re.sub(r'[^a-z0-9_]', '', text.lower())
+want = re.sub(r'[^a-z0-9_]', '', '''$2'''.lower())
+sys.exit(0 if want and want in flat else 1)
+"; then
       echo "forbidden /$2/ visible ($1-a$i)" >&2; return 1
     fi
     down 3
   done
   return 0
 }
-# panel_absent <tag> <pattern> [max=12] — assert a pattern appears NOWHERE
-# in the panel across the full scroll range. A single-viewport absence
-# proves nothing when the content (workspace JSON) spans screens (proven
-# 2026-09-13: 2g3 viewport sat on keep.rb while lib/a.rb lived off-screen).
-# Needs actions.sh sourced.
+# panel_absent <tag> <pattern> [max=12] — legacy single-pattern absence.
+# Prefer path_absent for workspace paths (segment-split-proof).
 panel_absent() {
   local max="${3:-12}" i rc
   panel_top "$1-top"

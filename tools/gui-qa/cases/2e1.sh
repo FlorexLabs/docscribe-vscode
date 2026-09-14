@@ -21,7 +21,8 @@ _rbs_bundle "$MPROJ" || return 1
 
 trust_off
 trap 'trust_restore' EXIT
-fresh_window_checked "$MPROJ" "rbs-mproj" || return 1
+window_gate "$MPROJ" || return 1
+trust_on "$MPROJ" || return 1
 escape
 
 # s1: only sig/

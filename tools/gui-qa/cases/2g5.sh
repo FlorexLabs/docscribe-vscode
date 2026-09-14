@@ -16,8 +16,9 @@ pkill -9 -f "docscribe server" 2>/dev/null
 sleep 2
 trust_off
 trap 'trust_restore' EXIT
-fresh_window_checked "$WS_STAND" "ws-stand" || return 1
-front_window "v ws-stand" || return 1
+window_gate "$WS_STAND" || return 1
+trust_on "$WS_STAND" || return 1
+# (front_window superseded by window_gate above)
 escape
 python3 -c "import json; p='$SET'; d=json.load(open(p)); d['docscribe.ignorePatterns']=['**/gen/**']; json.dump(d, open(p,'w'))"
 # (No open_file before the check: a pre-toggle auto-check would fill Output
@@ -29,11 +30,22 @@ pathhunt "2g5" "lib/a" \
 path_absent "2g5" "gen/c" \
   || { echo "gen/c leaked despite ignorePatterns" >&2; return 1; }
 # Step 2: on-save check of a gen/ file stays quiet in Problems.
-# Oracle on the group-header folder ("c.rb gen"): the bare "c.rb" also
-# appears as editor tab title and chat context below the panel anchor
-# (proven 2026-09-13, false red), but only a real diagnostic group carries
-# the qualified folder. Positive control: the a.rb group must be visible
-# (proves the Problems pipeline is live, not stale-empty).
+# First run a VISIBLE check of lib/a.rb so the Problems panel is proven
+# live (a previous workspace check leaves it STALE-EMPTY: "No problems"
+# with zero groups proves nothing — proven 2026-09-14, false red on the
+# old positive control).
+open_file "$WS_STAND/lib/a.rb"
+touch_check
+sleep 4
+problems
+shot "2g5-ctrl"
+ocr_text | grep -qi "Problems" || { echo "problems view not open" >&2; return 1; }
+panel_grep "$LAST_SHOT" "a\.rb" \
+  || { echo "Problems pipeline looks dead (no a.rb group)" >&2; python3 -c "import json; b=json.load(open('/tmp/gui-qa-settings.bak')); json.dump(b, open('$SET','w'))"; return 1; }
+# Now the quiet check: gen/c.rb must add NO group. Oracle on the
+# group-header folder ("c.rb gen"): the bare "c.rb" also appears as editor
+# tab title and chat context below the panel anchor (proven 2026-09-13,
+# false red), but only a real diagnostic group carries the folder.
 open_file "$WS_STAND/gen/c.rb"
 touch_check
 sleep 4

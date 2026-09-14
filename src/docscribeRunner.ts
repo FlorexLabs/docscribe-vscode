@@ -682,11 +682,14 @@ export function resolveRbsContext(projectRoot: string, caps: Capabilities | null
   const collection = hasCollection(projectRoot);
   const validateTypesEnabled = config.get<boolean>('validateTypes', true);
   const validateTypes = caps ? validateTypesEnabled && caps.hasValidateTypes : undefined;
+  // Card 557: omitBoilerplate must reach the daemon fix path too (the CLI
+  // path already gets -B via getCommandArgs; the RPC path had no carrier).
+  const omitBoilerplate = config.get<boolean>('omitBoilerplate', false);
   return {
     useRbs,
     collection,
     validateTypes,
-    overrides: buildRbsCliOverrides(useRbs, collection, validateTypes === true),
+    overrides: buildRbsCliOverrides(useRbs, collection, validateTypes === true, omitBoilerplate),
   };
 }
 

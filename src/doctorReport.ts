@@ -8,7 +8,7 @@ import { getSocketPath, readPid, isProcessAlive } from './docscribeClient';
  * Build the Doctor diagnostics report as plain text.
  *
  * Shared by the `docscribe.doctor` command (shown in the
- * `DocScribe Doctor Report` output channel) and the `docscribe_doctor`
+ * `DocScribe Doctor` output channel) and the `docscribe_doctor`
  * language-model tool (returned as text to the agent).
  *
  * @returns Multi-line report: Ruby, project root, gem version,

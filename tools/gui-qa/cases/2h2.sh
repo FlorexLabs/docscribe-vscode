@@ -16,8 +16,9 @@ RB40_RUBY="$HOME/.rbenv/versions/4.0.6/bin/ruby"
 python3 -c "import json; p='$SET'; d=json.load(open(p)); d['docscribe.rubyPath']='$RB40_RUBY'; json.dump(d, open(p,'w'))"
 cp "$HOME/docscribe/rbs_collection.lock.yaml" "$RB40_STAND/" 2>/dev/null \
   || touch "$RB40_STAND/rbs_collection.lock.yaml"
-fresh_window_checked "$RB40_STAND" "rb40-stand" || return 1
-front_window "v rb40-stand" || return 1
+window_gate "$RB40_STAND" || return 1
+trust_on "$RB40_STAND" || return 1
+# (front_window superseded by window_gate above)
 escape
 open_file "$RB40_STAND/widget.rb"
 log=$(docscribe_log)

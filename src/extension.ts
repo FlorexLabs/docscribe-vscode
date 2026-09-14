@@ -465,14 +465,7 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   const doctorCmd = vscode.commands.registerCommand('docscribe.doctor', async () => {
-    // Card 556: dedicated channel name. The old 'DocScribe Doctor' collided
-    // with the results channel 'DocScribe' in VS Code's channel picker
-    // (substring match): every Doctor invocation hijacked the results
-    // channel, so subsequent workspace-check JSON rendered into the Doctor
-    // channel and driver oracles hunting the DocScribe channel saw STALE
-    // JSON from earlier cases (proven 2026-09-14: 2g3 kept seeing 3-file
-    // JSON without gen/keep.rb although the batch returned 4 files).
-    const channel = vscode.window.createOutputChannel('DocScribe Doctor Report');
+    const channel = vscode.window.createOutputChannel('DocScribe Doctor');
     channel.clear();
     channel.appendLine(await buildDoctorReport());
     channel.show();

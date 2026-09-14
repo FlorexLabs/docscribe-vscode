@@ -2,8 +2,29 @@
 # Reliable GUI actions only. No coordinate clicks, no modifier+symbol.
 VSCODE_APP="${VSCODE_APP:-Visual Studio Code}"
 
+# osa — osascript with retry on transient AppleEvent failures.
+# Proven 2026-09-14: plain osascript intermittently dies with
+# "41:49: execution error: Connection is invalid. (-609)" mid-run
+# (AppleEvents to Code dropped under load), silently no-opping the
+# keystroke. Every automation keystroke below routes through osa so a
+# single dropped event retries instead of desyncing the whole case.
+# Double-delivery risk: only idempotent presses route here with retries;
+# free-text typing callers pass OSA_NORETRY=1 (a retried query would
+# append duplicate text; upper layers re-run the whole palette instead).
+osa() {
+  local tries="${OSA_TRIES:-3}" i=0 out
+  while (( i < tries )); do
+    i=$((i + 1))
+    out=$(osascript "$@" 2>&1) && { [[ -n "$out" ]] && echo "$out"; return 0; }
+    echo "osa try $i/$tries failed: $out" >&2
+    [[ -n "${OSA_NORETRY:-}" ]] && return 1
+    sleep 2
+  done
+  return 1
+}
+
 activate() {
-  osascript -e "tell application \"$VSCODE_APP\" to activate"
+  osa -e "tell application \"$VSCODE_APP\" to activate"
   sleep 0.5
 }
 
@@ -11,46 +32,50 @@ activate() {
 # Leading Escape makes it idempotent: a stale open palette would toggle
 # shut on Cmd+Shift+P and eat the query (proven 2026-09-13, cascade desync).
 palette() {
-  osascript -e 'tell application "System Events" to key code 53'
+  osa -e 'tell application "System Events" to key code 53'
   sleep 0.5
   activate
-  osascript -e "tell application \"System Events\" to keystroke \"p\" using {command down, shift down}"
+  osa -e "tell application \"System Events\" to keystroke \"p\" using {command down, shift down}"
   sleep 1
-  osascript -e "tell application \"System Events\" to keystroke \"$1\""
+  # Free-text typing: single-shot (OSA_NORETRY=1). A retried query would
+  # append duplicate text; upper layers re-run the whole palette instead
+  # (palette self-resets via leading Escape).
+  OSA_NORETRY=1 osa -e "tell application \"System Events\" to keystroke \"$1\""
   sleep 2
 }
 
 # palette_run "<query>" — palette + Enter, waits for settle.
 palette_run() {
   palette "$1"
-  osascript -e 'tell application "System Events" to key code 36'
+  osa -e 'tell application "System Events" to key code 36'
   sleep 3
 }
 
 # ctrl_g <line> — VSCode "go to line".
 ctrl_g() {
-  osascript -e 'tell application "System Events" to keystroke "g" using control down'
+  osa -e 'tell application "System Events" to keystroke "g" using control down'
   sleep 0.8
-  osascript -e "tell application \"System Events\" to keystroke \"$1\""
+  # Free-text typing: single-shot, see palette() above.
+  OSA_NORETRY=1 osa -e "tell application \"System Events\" to keystroke \"$1\""
   sleep 0.3
-  osascript -e 'tell application "System Events" to key code 36'
+  osa -e 'tell application "System Events" to key code 36'
   sleep 1
 }
 
 # problems — focus the Problems view via palette (hotkey unreliable headless).
 problems() {
   palette "View: Show Problems"
-  osascript -e 'tell application "System Events" to key code 36'
+  osa -e 'tell application "System Events" to key code 36'
   sleep 2
 }
 # shift_f10 — context menu at cursor.
 shift_f10() {
-  osascript -e 'tell application "System Events" to key code 109 using {shift down}'
+  osa -e 'tell application "System Events" to key code 109 using {shift down}'
   sleep 1
 }
 
 escape() {
-  osascript -e 'tell application "System Events" to key code 53'
+  osa -e 'tell application "System Events" to key code 53'
   sleep 0.5
 }
 
@@ -111,7 +136,7 @@ for o in d:
 pageup() {
   local n="${1:-4}" i
   for (( i = 0; i < n; i++ )); do
-    osascript -e 'tell application "System Events" to key code 116'
+    osa -e 'tell application "System Events" to key code 116'
     sleep 0.3
   done
 }
@@ -120,7 +145,7 @@ pageup() {
 pagedown() {
   local n="${1:-2}" i
   for (( i = 0; i < n; i++ )); do
-    osascript -e 'tell application "System Events" to key code 121'
+    osa -e 'tell application "System Events" to key code 121'
     sleep 0.3
   done
 }
@@ -128,23 +153,57 @@ pagedown() {
 down() {
   local n="${1:-1}" i
   for (( i = 0; i < n; i++ )); do
-    osascript -e 'tell application "System Events" to key code 125'
+    osa -e 'tell application "System Events" to key code 125'
     sleep 0.2
   done
 }
 up() {
   local n="${1:-1}" i
   for (( i = 0; i < n; i++ )); do
-    osascript -e 'tell application "System Events" to key code 126'
+    osa -e 'tell application "System Events" to key code 126'
     sleep 0.2
   done
 }
-# close_window — via palette "File: Close Window" (Cmd+Shift+W keystroke is
-# DEAD in this VM like all single-letter Cmd+keystrokes, proven 2026-09-13;
-# the palette entry works). Caller must ensure no dirty tabs: hot exit
-# covers the rest.
+# close_window — Cmd+Shift+W keystroke closes the FRONT window (menu
+# accelerator; proven 2026-09-14 while palette "File: Close Window" only
+# focused the menu and never fired).
+# Verified variant (proven 2026-09-14, full run 27/46 post-mortem): the
+# keystroke silently no-ops when (a) focus is not in Code, or (b) a SAVE
+# DIALOG blocks the close ("Do you want to save the changes you made to
+# gui-undoc.rb?" — dirtied by touch_check/fix, dialog up BEFORE save_all
+# could run; palette can't open under a modal, so save_all is helpless).
+# So: save_all first, activate first, then keystroke, then VERIFY via
+# window_count and retry — and if the count stalls, screenshot for the
+# save dialog and click "Don't Save" via OCR coords (fixtures are
+# recreated per case, nothing worth keeping). Fail-loud instead of
+# accumulating ghosts that drown window_gate (n=7..9 in the red run).
 close_window() {
-  palette_run "File: Close Window"
+  local tries="${1:-3}" i before
+  for (( i = 1; i <= tries; i++ )); do
+    before=$(window_count)
+    save_all
+    activate
+    osa -e 'tell application "System Events" to keystroke "w" using {command down, shift down}'
+    sleep 3
+    if [[ "$(window_count)" -lt "$before" ]]; then
+      return 0
+    fi
+    shot "close-dlg-$i"
+    if ocr_text | grep -qi "Do you want to save"; then
+      echo "close_window: save dialog up, clicking Don't Save" >&2
+      # Anchored button pattern: bare "Don.t Save" ALSO matches the body
+      # text "don't save them." (which OCR lists FIRST), so the click
+      # landed on static text and the dialog survived all 3 tries
+      # (proven 2026-09-14: full run cascade). ^$ pins the button.
+      click_text "$LAST_SHOT" "^Don.t Save$" || true
+      sleep 2
+      if [[ "$(window_count)" -lt "$before" ]]; then
+        return 0
+      fi
+    fi
+  done
+  echo "close_window: still $(window_count) windows after $tries tries (was $before)" >&2
+  return 1
 }
 # close_editor — Cmd+W closes the active editor tab (file must be saved).
 # Needed before Problems-absence shots: editor source text would match the
@@ -156,7 +215,7 @@ close_editor() {
 # save_all — File: Save All Files via palette (no focus needed).
 save_all() {
   palette "File: Save All Files"
-  osascript -e 'tell application "System Events" to key code 36'
+  osa -e 'tell application "System Events" to key code 36'
   sleep 2
 }
 # fresh_window <dir> — close the front window, open dir in a new window.
@@ -168,22 +227,68 @@ fresh_window() {
   sleep 10
   activate
 }
-# front_window <pattern> [tries=4] — ensure the FRONT window is ours.
-# After Reload Window macOS may refocus a background stand window; later
-# open_file/palette then land in the wrong project as stray tabs (proven
-# 2026-09-13: 2e5 off-phase edited qa-stand). Cycle Cmd+` until the
-# explorer root matches. Pattern like "v vt-stand" (OCR of explorer root).
-front_window() {
-  local tries="${2:-4}" i
+# window_gate <dir> [tries=6] — hermetic per-case window state.
+# Kills the multi-window roulette at the root: closes windows until exactly
+# ONE remains, opens <dir> if needed, and asserts via `code --status` that
+# the single window's folder IS <dir>. Deterministic (no OCR): --status
+# prints "window [N] (folder)" per window.
+# Why: front_window greps fullscreen OCR, and out-of-workspace tab titles
+# ("a.rb — ws-stand" inside the qa-stand window) false-positive it —
+# palette then runs the check with folders[0]=qa-stand while the oracle
+# hunts ws-stand JSON (proven 2026-09-14: instrumented batch logged
+# ROOT=qa-stand during a ws-stand case). Stale Output from other windows
+# dies with them (channels are per-window host, shared name).
+window_gate() {
+  local tries="${2:-6}" i n title base
+  base=$(basename "$1")
   for (( i = 1; i <= tries; i++ )); do
-    shot "front-$i"
-    if ocr_text | grep -qi "$1"; then
-      return 0
+    n=$(window_count)
+    if [[ "$n" == "1" ]]; then
+      title=$(code --status 2>/dev/null | grep -o "window \[[0-9]*\][^$]*" | head -n 1)
+      if echo "$title" | grep -qi "$base"; then
+        activate
+        return 0
+      fi
+      # Single window but the WRONG folder (e.g. base qa-stand from run.sh
+      # start while the case wants ws-stand): retarget it instead of
+      # close+reopen ping-pong (proven 2026-09-14: blind close killed the
+      # front window, which was often the just-opened target).
+      # NOTE: `code --reuse-window` does NOT retarget a live window's
+      # workspaceFolders[0] (proven 2026-09-13: Doctor kept reporting
+      # qa-stand). So: save-all (no save dialog can block the close),
+      # close the wrong window, open the target fresh. Verified close:
+      # abort loudly on failure (stuck window poisons later cases).
+      save_all
+      close_window || return 1
+      code "$1" >/dev/null 2>&1
+      sleep 10
+      activate
+      continue
     fi
-    osascript -e 'tell application "System Events" to keystroke "`" using command down'
-    sleep 1
+    # Too many windows: cycle Cmd+` to the target window FIRST, then close
+    # it via Close Window. Blind close_window kills the FRONT window, which
+    # is often the qa-stand BASE — then `code <dir>` reopens the stand and
+    # the gate ping-pongs between two survivors forever (proven 2026-09-14:
+    # --reuse-window also refuses to retarget across windows, so the dead
+    # window can only be closed when frontmost).
+    # close_window is verified: abort loudly if it fails (a stuck window
+    # poisons every later case — fail fast beats cascade red).
+    cycled=0
+    for (( j = 1; j <= n; j++ )); do
+      shot "gate-cycle-$i-$j"
+      if ocr_text | grep -qi "$base"; then
+        cycled=1; break
+      fi
+      osa -e 'tell application "System Events" to keystroke "`" using command down'
+      sleep 1
+    done
+    close_window || return 1
+    code "$1" >/dev/null 2>&1
+    sleep 8
+    activate
   done
-  echo "front window has no /$1/ after $tries tries" >&2; return 1
+  echo "window_gate: no single $base window after $tries tries (n=$(window_count))" >&2
+  return 1
 }
 # touch_check — force extension onSave (checkDocument) without Cmd+S.
 # Single-letter Cmd+keystrokes (Cmd+S/W/N) are dead in this VM (proven
@@ -194,7 +299,7 @@ front_window() {
 # case (mk*), so no cross-run dirt. Prefer palette Check commands when the
 # file content must stay byte-clean.
 touch_check() {
-  osascript -e 'tell application "System Events" to key code 49'
+  osa -e 'tell application "System Events" to key code 49'
   sleep 1
   save
 }
@@ -211,8 +316,54 @@ palette_run_until_log() {
   done
   return 1
 }
+# trust_on — grant workspace trust by opening the folder FRESH with zero
+# windows open. A fresh Code launch on an untrusted folder shows the
+# workspace-trust STARTUP DIALOG (not the Manage-Trust editor, which has
+# no palette entry that opens it directly — proven 2026-09-14: Enter on
+# "Workspaces: Manage Workspace Trust" opened a folder picker that stole
+# the window). The startup dialog has a Trust button; click it via OCR.
+# Precondition: caller already window_gated to the stand (front window is
+# ours, palette works there). Post: trusted + Reload for ext host.
+# Restored by trust_restore like trust_off. Needs assert.sh.
+trust_on() {
+  cp "$HOME/Library/Application Support/Code/User/settings.json" /tmp/gui-qa-settings.bak
+  # Close ALL windows: the next `code <dir>` is a fresh launch that shows
+  # the trust startup dialog for untrusted folders.
+  palette_run "File: Close Window"
+  code --status 2>/dev/null | grep -q "window \[" && palette_run "File: Close Window"
+  sleep 2
+  code "$1" >/dev/null 2>&1
+  sleep 10
+  activate
+  shot "trust-dlg"
+  if ocr_text | grep -qiE "Do you trust|Trust the authors|trust this folder"; then
+    local xy
+    xy=$(~/qa-vm-bin/vocr "$LAST_SHOT" 2>/dev/null | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+for o in d:
+    t = o['text'].strip().lower()
+    if t in ('trust', 'trust folder', 'yes, i trust the authors'):
+        print(f\"{int((o['x'] + o['w'] / 2) / 2)},{int((o['y'] + o['h'] / 2) / 2)}\")
+        break
+")
+    if [[ -z "$xy" ]]; then
+      echo "trust_on: dialog visible but no Trust button in $LAST_SHOT" >&2
+      return 1
+    fi
+    cliclick c:$xy
+    sleep 3
+  fi
+  # Already trusted: no dialog, straight to reload.
+  palette_run "Reload Window"
+  sleep 10
+  activate
+}
 # trust_off / trust_restore — Workspace Trust prompt blocks palette automation
 # on never-opened folders; disable around fresh_window, restore after.
+# NOTE: trust_off does NOT grant trust to an already-untrusted folder (the
+# key only gates the prompt) — use trust_on for that. Restored by the same
+# trust_restore.
 trust_off() {
   cp "$HOME/Library/Application Support/Code/User/settings.json" /tmp/gui-qa-settings.bak
   python3 -c "import json; p='$HOME/Library/Application Support/Code/User/settings.json'; d=json.load(open(p)); d['security.workspace.trust.enabled']=False; json.dump(d, open(p,'w'))"

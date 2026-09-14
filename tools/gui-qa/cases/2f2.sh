@@ -13,8 +13,9 @@ RBS_STAND="/tmp/ut-stand"
 mk_rbs_stand || return 1
 trust_off
 trap 'trust_restore' EXIT
-fresh_window_checked "$RBS_STAND" "ut-stand" || return 1
-front_window "v ut-stand" || return 1
+window_gate "$RBS_STAND" || return 1
+trust_on "$RBS_STAND" || return 1
+# (front_window superseded by window_gate above)
 escape
 open_file "$RBS_STAND/widget.rb"
 # Part A: dead daemon must not break the command.
@@ -42,6 +43,11 @@ SET="$HOME/Library/Application Support/Code/User/settings.json"
 python3 -c "import json; p='$SET'; d=json.load(open(p)); d['docscribe.useServer']=False; json.dump(d, open(p,'w'))"
 pkill -9 -f "docscribe server" 2>/dev/null
 sleep 1
+# Part B runs headless on the ACTIVE editor (no file arg — same as the
+# palette command): re-focus widget.rb first, or findProjectRoot resolves
+# from whatever stray tab is frontmost ("No Gemfile found", proven
+# 2026-09-14).
+open_file "$RBS_STAND/widget.rb"
 log=$(docscribe_log)
 before=$(log_mark "$log")
 palette_run_until_log "DocScribe: Update types from RBS" "$log" "$before" \

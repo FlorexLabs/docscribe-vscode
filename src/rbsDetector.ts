@@ -206,17 +206,22 @@ export function rbsHash(projectRoot: string, gemfileHasRbs: boolean): string {
  * CLI overrides for daemon RPC calls (mirrors RubyMine `buildRbsCliOverrides`).
  *
  * Sends `rbs: true` (+ `rbs_collection: true` when the lock exists) when RBS
- * is in use, and `validate_types: true` when YARD validation is enabled.
+ * is in use, `validate_types: true` when YARD validation is enabled, and
+ * `no_boilerplate: true` when template text is suppressed (card 557 —
+ * previously the daemon fix path silently ignored `omitBoilerplate`, so
+ * GUI safe-fix wrote prose despite the setting).
  * Returns `undefined` when empty (sender drops empty overrides).
  *
  * @param useRbs - Effective RBS flag for the project.
  * @param collection - Whether `rbs_collection.lock.yaml` exists.
  * @param validateTypes - Whether YARD type validation is enabled.
+ * @param omitBoilerplate - Whether template text is suppressed.
  */
 export function buildRbsCliOverrides(
   useRbs: boolean,
   collection: boolean,
   validateTypes: boolean,
+  omitBoilerplate = false,
 ): Record<string, boolean> | undefined {
   const overrides: Record<string, boolean> = {};
   if (useRbs) {
@@ -224,5 +229,6 @@ export function buildRbsCliOverrides(
     if (collection) overrides['rbs_collection'] = true;
   }
   if (validateTypes) overrides['validate_types'] = true;
+  if (omitBoilerplate) overrides['no_boilerplate'] = true;
   return Object.keys(overrides).length > 0 ? overrides : undefined;
 }

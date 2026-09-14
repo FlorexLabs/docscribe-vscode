@@ -6,6 +6,7 @@ import * as sinon from 'sinon';
 import {
   findProjectRoot,
   execCommand,
+  checkGemInstalled,
   parseCapabilities,
   clearCachedCapabilitiesForTesting,
   clearServerModeWarningForTesting,
@@ -18,6 +19,7 @@ import {
   loadFileFilterPatterns,
   loadGitignorePatterns,
   ensureRbsGemLine,
+  getCommandArgs,
 } from '../../docscribeRunner';
 
 const fixturesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'test', 'suite', 'fixtures');
@@ -64,6 +66,12 @@ suite('docscribeRunner', () => {
     test('stops at filesystem root', () => {
       const result = findProjectRoot('/');
       assert.strictEqual(result, null);
+    });
+
+    test('returns null for a deleted file instead of throwing (card 519)', () => {
+      const ghost = path.join(tmpDir, 'gone.rb');
+      assert.strictEqual(fs.existsSync(ghost), false);
+      assert.strictEqual(findProjectRoot(ghost), null);
     });
 
     test('detects Gemfile in the fixtures directory', () => {
@@ -134,6 +142,75 @@ suite('docscribeRunner', () => {
       assert.strictEqual(result.stdout, 'stdout');
       assert.strictEqual(result.stderr, 'stderr');
       assert.strictEqual(result.output, 'stdout\nstderr');
+    });
+
+    test('marks result cancelled when signal aborts (card 497)', async () => {
+      const controller = new AbortController();
+      const mockExec = sinon
+        .stub()
+        .callsFake(
+          (
+            _cmd: string,
+            _args: string[],
+            options: { signal?: AbortSignal },
+            callback: (err: Error | null, stdout: string, stderr: string) => void,
+          ) => {
+            if (options.signal?.aborted) {
+              callback(Object.assign(new Error('aborted'), { code: 'ABORT_ERR' }), '', '');
+            } else {
+              callback(null, 'output text', '');
+            }
+          },
+        );
+      controller.abort();
+      const result = await execCommand('bundle', ['exec', 'docscribe', 'a.rb'], '/tmp', mockExec, {
+        signal: controller.signal,
+      });
+      assert.strictEqual(result.cancelled, true);
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(result.hasIssues, false);
+    });
+
+    test('passes signal through to exec options', async () => {
+      const controller = new AbortController();
+      const mockExec = sinon.stub().yields(null, 'output text', '');
+      await execCommand('bundle', ['exec', 'docscribe', 'a.rb'], '/tmp', mockExec, {
+        signal: controller.signal,
+      });
+      const execOptions = mockExec.firstCall.args[2] as { signal?: AbortSignal };
+      assert.strictEqual(execOptions.signal, controller.signal);
+    });
+
+    test('cancelled defaults to false without signal', async () => {
+      const mockExec = sinon.stub().yields(null, 'output text', '');
+      const result = await execCommand('bundle', ['exec', 'docscribe', 'a.rb'], '/tmp', mockExec);
+      assert.strictEqual(result.cancelled, false);
+    });
+  });
+
+  suite('checkGemInstalled', () => {
+    test('returns true on exit 0 with version on stdout', async () => {
+      const mockExec = sinon.stub().yields(null, '1.6.2\n', '');
+      assert.strictEqual(await checkGemInstalled('/tmp', mockExec), true);
+    });
+
+    test('returns false on exit 1 (card 495: missing gem, bundler "not currently included")', async () => {
+      const err = Object.assign(new Error('missing gem'), { code: 1 });
+      const mockExec = sinon
+        .stub()
+        .yields(err, '', "Could not find gem 'docscribe' (not currently included)");
+      assert.strictEqual(await checkGemInstalled('/tmp', mockExec), false);
+    });
+
+    test('returns false on exit 0 without version on stdout', async () => {
+      const mockExec = sinon.stub().yields(null, '', '');
+      assert.strictEqual(await checkGemInstalled('/tmp', mockExec), false);
+    });
+
+    test('returns false on exec error (exit code 2+)', async () => {
+      const err = Object.assign(new Error('fail'), { code: 2 });
+      const mockExec = sinon.stub().yields(err, '', 'bundler: command not found: bundle');
+      assert.strictEqual(await checkGemInstalled('/tmp', mockExec), false);
     });
   });
 
@@ -321,6 +398,11 @@ suite('docscribeRunner', () => {
       assert.strictEqual(matchFilePattern('/_spec\\.rb$/', 'spec/a_spec.rb'), true);
       assert.strictEqual(matchFilePattern('/_spec\\.rb$/', 'lib/a.rb'), false);
       assert.strictEqual(matchFilePattern('**/.hidden.rb', '.hidden.rb'), true);
+      // Card 555: trailing /**/* also matches the dir itself, so file
+      // negations (gen/keep.rb vs ignore gen/**/*) can un-ignore it.
+      assert.strictEqual(matchFilePattern('gen/**/*', 'gen/keep.rb'), true);
+      assert.strictEqual(matchFilePattern('gen/**/*', 'gen/c.rb'), true);
+      assert.strictEqual(matchFilePattern('gen/**/*', 'lib/a.rb'), false);
     });
 
     test('processFileByFilter: exclude wins, empty include means all', () => {
@@ -434,6 +516,52 @@ suite('docscribeRunner', () => {
 
     test('handles empty array', () => {
       assert.deepStrictEqual(chunkArray([], 32), []);
+    });
+  });
+
+  suite('getCommandArgs updateTypes (card 552)', () => {
+    test('updateTypes has no --format flag (gem rejects it)', () => {
+      const args = getCommandArgs('updateTypes', true, true, false, 'widget.rb', true, true);
+      assert.ok(args.includes('update_types'));
+      assert.ok(!args.includes('--format'));
+      assert.ok(!args.includes('json'));
+    });
+
+    test('updateTypes carries no mode flags (gem rejects -A/-k/-B)', () => {
+      const args = getCommandArgs('updateTypes', true, true, true, 'widget.rb', true, true);
+      assert.ok(!args.includes('-A'));
+      assert.ok(!args.includes('-k'));
+      assert.ok(!args.includes('-B'));
+    });
+
+    test('updateTypes target with rbs, collection and validate flags', () => {
+      const args = getCommandArgs('updateTypes', true, true, false, 'widget.rb', true, true);
+      assert.deepStrictEqual(args, [
+        'update_types',
+        '--rbs',
+        '--rbs-collection',
+        '--validate-types',
+        'widget.rb',
+      ]);
+    });
+
+    test('updateTypes --no-validate-types when disabled', () => {
+      const args = getCommandArgs('updateTypes', true, false, false, 'f.rb', false, false);
+      assert.ok(args.includes('--no-validate-types'));
+      assert.ok(!args.includes('--format'));
+    });
+
+    test('check keeps --format json', () => {
+      const args = getCommandArgs('check', true, false, false, 'f.rb', undefined, false);
+      assert.ok(args.includes('--format'));
+      assert.ok(args.includes('json'));
+    });
+
+    test('updateTypes workspace call carries no file arg (always CLI)', () => {
+      const args = getCommandArgs('updateTypes', true, true, false, undefined, true, true);
+      assert.ok(!args.includes('--format'));
+      assert.ok(args.includes('update_types'));
+      assert.ok(args.includes('--rbs'));
     });
   });
 });

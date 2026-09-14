@@ -19,8 +19,11 @@ export async function buildDoctorReport(): Promise<string> {
   const lines: string[] = ['=== DocScribe Doctor ===', ''];
 
   try {
+    const rubyPath = vscode.workspace.getConfiguration('docscribe').get<string>('rubyPath', 'ruby');
     const rubyResult = await new Promise<string>((resolve) => {
-      execFile('ruby', ['--version'], (err: Error | null, stdout: string) => {
+      // Card 2H.1: honor the configured interpreter (default PATH ruby),
+      // so Doctor observes the same Ruby the daemon path uses.
+      execFile(rubyPath, ['--version'], (err: Error | null, stdout: string) => {
         resolve(err ? 'Not found' : stdout.trim());
       });
     });

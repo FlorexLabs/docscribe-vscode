@@ -27,6 +27,29 @@ documentation. Compatible with **docscribe >= 1.5.0**.
 - **`.rake` support** — diagnostics and code actions work on Rake files
 - **JSON output** — uses `docscribe --format json` (RuboCop-compatible) for reliable diagnostics parsing
 
+* [DocScribe](#docscribe)
+  * [Features](#features)
+  * [Requirements](#requirements)
+  * [Usage](#usage)
+    * [Commands](#commands)
+    * [Diagnostics](#diagnostics)
+    * [Code Actions](#code-actions)
+    * [Example](#example)
+    * [Settings](#settings)
+    * [Language-model tools (AI agents)](#language-model-tools-ai-agents)
+    * [Localization](#localization)
+  * [Development](#development)
+    * [Prerequisites](#prerequisites)
+    * [Setup](#setup)
+    * [Scripts](#scripts)
+    * [Testing](#testing)
+    * [End-to-end GUI tests (Tart macOS VM + Vision OCR)](#end-to-end-gui-tests-tart-macos-vm--vision-ocr)
+    * [Documentation](#documentation)
+  * [CI](#ci)
+    * [Release workflow](#release-workflow)
+  * [Project Structure](#project-structure)
+  * [License](#license)
+
 ## Requirements
 
 - **Ruby** (>= 2.7) with Bundler
@@ -61,6 +84,7 @@ All commands are available via **Command Palette** (`Cmd+Shift+P` / `Ctrl+Shift+
 | `DocScribe: Apply safe fixes to current file`       | `Cmd+Shift+D` `S`   | Add docs to undocumented methods only (`-a`)                                                      |
 | `DocScribe: Apply aggressive fixes to current file` | `Cmd+Shift+D` `A`   | Replace all existing YARD docs (`-A -k`)                                                          |
 | `DocScribe: Update types from RBS`                  | `Cmd+Shift+D` `U`   | Two-pass: aggressive then safe update from RBS                                                    |
+| `DocScribe: Doctor`                                 | — (Command Palette) | Environment diagnostics report (Ruby, gem version, capabilities, backend, settings)               |
 | _(lightbulb only)_                                  | —                   | RBS-sourced diagnostics offer Update Types for the file (daemon `update_types` RPC, gem >= 1.6.2) |
 | `DocScribe: Toggle fold YARD comments`              | — (Command Palette) | Collapse all YARD comment blocks in the current file                                              |
 
@@ -128,15 +152,19 @@ The extension flags methods missing documentation and can auto-generate blocks l
 
 ### Settings
 
-| Setting                    | Default     | Description                                            |
-|----------------------------|-------------|--------------------------------------------------------|
-| `docscribe.commandPath`    | `docscribe` | Path to the docscribe executable                       |
-| `docscribe.useBundleExec`  | `true`      | Use `bundle exec docscribe`                            |
-| `docscribe.runOnSave`      | `true`      | Check automatically on file save and open              |
-| `docscribe.useRbs`         | `true`      | Use RBS signatures for type inference when available   |
-| `docscribe.validateTypes`  | `true`      | Validate YARD types (`--validate-types`, gem >= 1.6.2) |
-| `docscribe.ignorePatterns` | `[]`        | Glob patterns for files to skip (e.g. `**/vendor/**`)  |
-| `docscribe.foldComments`   | `false`     | Auto-collapse YARD comment blocks on file open         |
+| Setting                     | Default     | Description                                                                           |
+|-----------------------------|-------------|---------------------------------------------------------------------------------------|
+| `docscribe.commandPath`     | `docscribe` | Path to the docscribe executable                                                      |
+| `docscribe.useBundleExec`   | `true`      | Use `bundle exec docscribe`                                                           |
+| `docscribe.runOnSave`       | `true`      | Check automatically on file save and open                                             |
+| `docscribe.useRbs`          | `true`      | Use RBS signatures for type inference when available                                  |
+| `docscribe.validateTypes`   | `true`      | Validate YARD types (`--validate-types`, gem >= 1.6.2)                                |
+| `docscribe.ignorePatterns`  | `[]`        | Glob patterns for files to skip (e.g. `**/vendor/**`)                                 |
+| `docscribe.foldComments`    | `false`     | Auto-collapse YARD comment blocks on file open                                        |
+| `docscribe.omitBoilerplate` | `false`     | Omit boilerplate description text from generated YARD docs (passes `-B` to docscribe) |
+| `docscribe.rubyPath`        | `ruby`      | Path to Ruby executable (used for version checks and daemon locale)                   |
+| `docscribe.bundlePath`      | `bundle`    | Path to Bundler executable                                                            |
+| `docscribe.useServer`       | `true`      | Use persistent docscribe server mode for faster checks (Unix socket)                  |
 
 ### Language-model tools (AI agents)
 
@@ -187,6 +215,43 @@ Tests use `@vscode/test-electron` with Mocha and Sinon. They run in a headless V
 ```bash
 npm test
 ```
+
+### End-to-end GUI tests (Tart macOS VM + Vision OCR)
+
+Headless tests cannot cover palette flows, balloons, trust dialogs, reload races, or multi-window behavior. Those are
+covered by a Vision-driven GUI suite in `tools/gui-qa/` (46 cases, `2a1`–`2i7`; full run ≈ 50 minutes). No LLM in the
+loop: screenshots stay files, only OCR text is asserted.
+
+Prerequisites (one-time):
+
+- [Tart](https://github.com/cirruslabs/tart) VM named `qa-vm` (Apple Silicon macOS, user `admin`), reachable over SSH
+  without password prompt.
+- Inside the VM: `~/qa-vm-bin/vocr` (Vision OCR binary), Ruby via rbenv (including 4.0.x for the Doctor matrix), and a
+  `~/docscribe` checkout of the gem (stands reference it as a path gem). The RU language pack is installed automatically
+  by the locale case.
+- On the host: network proxy for the VM's gem installs — `python3 ~/qa-vm/forward-proxy.py <host-ip> 18080` (the runner
+  fails loud with this hint when rubygems.org is unreachable from the VM).
+
+Run:
+
+```bash
+tart run --no-graphics qa-vm
+cd tools/gui-qa
+./run-remote.sh            # all cases (resolves VM IP, syncs tree, runs)
+./run-remote.sh cases/2b7.sh   # subset
+```
+
+`run-remote.sh` resolves the VM IP via `tart ip` (no hardcoded addresses), syncs `tools/gui-qa/` + `src/` + `out/` into
+the VM, then runs `run.sh` there. `run.sh` is idempotent: wipes session storage and backups, snapshots and restores the
+settings baseline, rebuilds + reinstalls the vsix on drift, gates on exactly one window before the first case, and tees
+a per-run log to `/tmp/gui-qa/run-<timestamp>.log`. Exit code = failure count; `2a5` is an expected fail. Screenshots
+land in `/tmp/gui-qa/`; the DocScribe exthost log
+(`~/Library/Application Support/Code/logs/*/window*/exthost/output_logging_*/1-DocScribe.log`) shows what the extension
+actually did.
+
+Case authoring laws (`tools/gui-qa/README.md`): palette plain text only, no coordinate clicks, no modifier+symbol
+keystrokes; single-letter Cmd+keystrokes are dead in the VM (use palette `save`, `touch_check`, `panel_grep`); assert
+via panel-confined OCR oracles; settings toggles always trap-restored.
 
 ### Documentation
 

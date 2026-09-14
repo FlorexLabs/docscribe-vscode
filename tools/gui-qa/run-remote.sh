@@ -19,10 +19,15 @@ if ! "${SSH[@]}" 'echo VM_OK' 2>/dev/null | grep -q VM_OK; then
 fi
 
 ROOT="$(cd ../.. && pwd)"
+# NOTE: `out/` MUST sync too — run.sh compiles in-VM (npm run compile) and
+# compares out/ sums, so a dropped exclude silently rebuilds the vsix from
+# STALE compiled JS while src/ is fresh (proven 2026-09-14: fix 555 present
+# in src/, absent from installed ext, green framework + red driver).
+# node_modules/.git/.vscode-test stay excluded; .vsix artifacts excluded.
 rsync -az --exclude node_modules --exclude out --exclude .git --exclude .vscode-test \
   "$ROOT/tools/gui-qa/" "admin@$IP:~/docscribe-vscode/tools/gui-qa/" || exit 2
-rsync -az --exclude node_modules --exclude out --exclude .git --exclude .vscode-test \
-  "$ROOT/src/" "admin@$IP:~/docscribe-vscode/src/" || exit 2
+rsync -az --exclude node_modules --exclude .git --exclude .vscode-test --exclude '*.vsix' \
+  "$ROOT/src/" "$ROOT/out/" "$ROOT/package.json" "admin@$IP:~/docscribe-vscode/" || exit 2
 echo "# sync: tree -> VM"
 
 "${SSH[@]}" "cd ~/docscribe-vscode/tools/gui-qa && ./run.sh $*"

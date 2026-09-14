@@ -177,6 +177,45 @@ suite('workspaceFilters (QA 2G)', () => {
         fs.rmSync(root, { recursive: true, force: true });
       }
     });
+
+    test('maxFiles hard-limits the walk (2G.4, default 5000)', () => {
+      const root = makeRoot();
+      try {
+        for (let i = 0; i < 5; i++) {
+          writeFile(root, `lib/f${i}.rb`, '');
+        }
+        const files = collectWorkspaceFiles(root, 3);
+        assert.strictEqual(files.length, 3);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('ignorePatterns setting gates workspace files (2G.5, card 553)', () => {
+      const root = makeRoot();
+      try {
+        writeFile(root, 'lib/a.rb', '');
+        writeFile(root, 'gen/c.rb', '');
+        const files = collectWorkspaceFiles(root, 5000, ['**/gen/**']);
+        assert.ok(files.includes(path.join(root, 'lib', 'a.rb')));
+        assert.ok(!files.includes(path.join(root, 'gen', 'c.rb')));
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('empty ignorePatterns changes nothing', () => {
+      const root = makeRoot();
+      try {
+        writeFile(root, 'lib/a.rb', '');
+        writeFile(root, 'gen/c.rb', '');
+        const files = collectWorkspaceFiles(root, 5000, []);
+        assert.ok(files.includes(path.join(root, 'lib', 'a.rb')));
+        assert.ok(files.includes(path.join(root, 'gen', 'c.rb')));
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   suite('root .gitignore', () => {
@@ -195,7 +234,6 @@ suite('workspaceFilters (QA 2G)', () => {
         fs.rmSync(root, { recursive: true, force: true });
       }
     });
-
     test('skips comments and blank lines', () => {
       const root = makeRoot();
       try {
@@ -205,6 +243,25 @@ suite('workspaceFilters (QA 2G)', () => {
         const files = collectWorkspaceFiles(root);
         assert.ok(!files.includes(path.join(root, 'artifacts', 'a.rb')));
         assert.ok(files.includes(path.join(root, 'top.rb')));
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('file negation re-includes the file (2G.3, card 555)', () => {
+      // Regression: `gen/**/*` never matched `gen/keep.rb` itself in
+      // minimatch, so `!gen/keep.rb` could not un-ignore it and the file
+      // stayed out of the workspace (driver 2g3, proven 2026-09-14).
+      const root = makeRoot();
+      try {
+        writeFile(root, 'gen/c.rb', '');
+        writeFile(root, 'gen/keep.rb', '');
+        writeFile(root, 'lib/a.rb', '');
+        writeFile(root, '.gitignore', 'gen/\n!gen/keep.rb\n');
+        const files = collectWorkspaceFiles(root);
+        assert.ok(!files.includes(path.join(root, 'gen', 'c.rb')));
+        assert.ok(files.includes(path.join(root, 'gen', 'keep.rb')));
+        assert.ok(files.includes(path.join(root, 'lib', 'a.rb')));
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
@@ -456,6 +513,89 @@ suite('workspaceFilters (QA 2G)', () => {
       assert.ok(activationEvents.includes('onLanguage:ruby'));
       assert.ok(activationEvents.includes('onLanguage:rake'));
       assert.ok(activationEvents.includes('workspaceContains:**/Gemfile'));
+    });
+
+    test('keybindings: 5 chords on editorLangId==ruby, doctor/fix/fold keyless (2I.5)', () => {
+      const kb = (pkg as unknown as { contributes: { keybindings: Record<string, string>[] } })
+        .contributes.keybindings;
+      const byCmd = new Map(kb.map((k) => [k['command'], k]));
+      for (const [cmd, tail] of [
+        ['docscribe.checkFile', 'd'],
+        ['docscribe.checkWorkspace', 'd w'],
+        ['docscribe.safeFix', 'd s'],
+        ['docscribe.aggressiveFix', 'd a'],
+        ['docscribe.updateTypes', 'd u'],
+      ]) {
+        const k = byCmd.get(cmd);
+        assert.ok(k, `${cmd} has a keybinding`);
+        assert.ok((k['key'] as string).endsWith(tail), `${cmd} key ${k['key']}`);
+        assert.ok((k['mac'] as string).endsWith(tail.replace('d', 'd')), `${cmd} mac ${k['mac']}`);
+        assert.strictEqual(k['when'], 'editorLangId == ruby');
+      }
+      const cmds = (
+        pkg as unknown as { contributes: { commands: { command: string }[] } }
+      ).contributes.commands.map((c) => c.command);
+      for (const c of ['docscribe.applyFix', 'docscribe.toggleFoldComments', 'docscribe.doctor']) {
+        assert.ok(cmds.includes(c), `${c} registered`);
+        assert.ok(!byCmd.has(c), `${c} has no hotkey`);
+      }
+    });
+
+    test('context menus gated on editorLangId==ruby incl updateTypes (2I.5/2I.6)', () => {
+      const menus = (
+        pkg as unknown as {
+          contributes: { menus: { 'editor/context': Record<string, string>[] } };
+        }
+      ).contributes.menus['editor/context'];
+      for (const cmd of [
+        'docscribe.checkFile',
+        'docscribe.safeFix',
+        'docscribe.aggressiveFix',
+        'docscribe.updateTypes',
+      ]) {
+        const m = menus.find((x) => x['command'] === cmd);
+        assert.ok(m, `${cmd} in context menu`);
+        assert.strictEqual(m['when'], 'editorLangId == ruby');
+      }
+    });
+
+    test('nls parity: ru mirrors en keys, no unresolved %..% (2I.3 statics)', () => {
+      const nls = JSON.parse(
+        fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'package.nls.json'), 'utf8'),
+      ) as Record<string, string>;
+      const nlsRu = JSON.parse(
+        fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'package.nls.ru.json'), 'utf8'),
+      ) as Record<string, string>;
+      assert.deepStrictEqual(new Set(Object.keys(nlsRu)), new Set(Object.keys(nls)));
+      for (const [k, v] of Object.entries(nlsRu)) {
+        assert.ok(!/%[a-zA-Z.]+%/.test(v), `${k} has unresolved placeholder`);
+      }
+      assert.ok((nlsRu['command.checkFile'] as string).includes('Проверить'));
+    });
+
+    test('defaults block has all 11 settings incl rubyPath/bundlePath (2I.1)', () => {
+      const cfg = (
+        pkg as unknown as {
+          contributes: { configuration: { properties: Record<string, { default: unknown }> } };
+        }
+      ).contributes.configuration.properties;
+      const expected: Record<string, unknown> = {
+        'docscribe.commandPath': 'docscribe',
+        'docscribe.useBundleExec': true,
+        'docscribe.runOnSave': true,
+        'docscribe.useRbs': true,
+        'docscribe.validateTypes': true,
+        'docscribe.ignorePatterns': [],
+        'docscribe.foldComments': false,
+        'docscribe.omitBoilerplate': false,
+        'docscribe.rubyPath': 'ruby',
+        'docscribe.bundlePath': 'bundle',
+        'docscribe.useServer': true,
+      };
+      for (const [k, v] of Object.entries(expected)) {
+        assert.ok(cfg[k], `${k} registered`);
+        assert.deepStrictEqual(cfg[k].default, v, `${k} default`);
+      }
     });
   });
 

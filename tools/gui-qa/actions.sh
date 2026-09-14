@@ -85,6 +85,28 @@ for o in d:
   cliclick c:$xy
   sleep 1
 }
+# tab_click <shot-png> <pattern> — click a tab by OCR text (retina-aware).
+# Cmd+W is dead in this VM, so switching tabs (not closing) is the way to
+# change the active editor. Unlike click_text, matches against the TOP tab
+# strip only (y < 400 @2x), so panel/explorer copies of the name can't win.
+tab_click() {
+  local png="$1" pattern="$2"
+  local xy
+  xy=$(~/qa-vm-bin/vocr "$png" 2>/dev/null | python3 -c "
+import json,sys,re
+d = json.load(sys.stdin)
+for o in d:
+    if o['y'] < 400 and re.search(r'''$pattern''', o['text'], re.I):
+        print(f\"{int((o['x'] + o['w'] / 2) / 2)},{int((o['y'] + o['h'] / 2) / 2)}\")
+        break
+")
+  if [[ -z "$xy" ]]; then
+    echo "tab_click: no tab match for /$pattern/ in $png" >&2
+    return 1
+  fi
+  cliclick c:$xy
+  sleep 1.5
+}
 # pageup [n] — Page Up n times in the focused view (default 4).
 pageup() {
   local n="${1:-4}" i
@@ -117,19 +139,18 @@ up() {
     sleep 0.2
   done
 }
-# close_window — DEAD in this VM (Cmd+Shift+W ignored like all single-letter
-# Cmd+keystrokes, proven 2026-09-13). Kept for fresh_window structure; window
-# cleanup happens via pre-run pkill in run.sh, NOT here. Do not rely on it.
+# close_window — via palette "File: Close Window" (Cmd+Shift+W keystroke is
+# DEAD in this VM like all single-letter Cmd+keystrokes, proven 2026-09-13;
+# the palette entry works). Caller must ensure no dirty tabs: hot exit
+# covers the rest.
 close_window() {
-  osascript -e 'tell application "System Events" to keystroke "w" using {command down, shift down}'
-  sleep 2
+  palette_run "File: Close Window"
 }
-# close_editor — DEAD in this VM (Cmd+W ignored, proven 2026-09-13; focus
-# tricks and click_text on the × do not help). Kept as harmless no-op.
-# Oracles must be panel-confined (panel_grep), never depend on closed tabs.
+# close_editor — Cmd+W closes the active editor tab (file must be saved).
+# Needed before Problems-absence shots: editor source text would match the
+# forbidden pattern fullscreen (proven 2026-09-13, 2e5-off false red).
 close_editor() {
-  osascript -e 'tell application "System Events" to keystroke "w" using command down'
-  sleep 1
+  palette_run "View: Close Editor"
 }
 
 # save_all — File: Save All Files via palette (no focus needed).
@@ -303,6 +324,109 @@ mk_norbs_stand() {
   return 0
 }
 
+# mk_ws_stand — workspace-filter project (2G): lib/, spec/, gen/, rake files,
+# safety-net dirs. Per-case mutations (yml, .gitignore, chmod, settings)
+# happen in the case itself; every case starts by recreating the stand.
+WS_STAND="/tmp/ws-stand"
+mk_ws_stand() {
+  rm -rf "$WS_STAND"
+  mkdir -p "$WS_STAND/lib" "$WS_STAND/spec" "$WS_STAND/gen" "$WS_STAND/lib/tasks" \
+    "$WS_STAND/node_modules" "$WS_STAND/vendor"
+  _rbs_gemfile "$WS_STAND" 0
+  cat > "$WS_STAND/lib/a.rb" <<'RUBY'
+class A
+  def go(x)
+    x
+  end
+end
+RUBY
+  cat > "$WS_STAND/spec/b_spec.rb" <<'RUBY'
+class B
+  def go(x)
+    x
+  end
+end
+RUBY
+  cat > "$WS_STAND/gen/c.rb" <<'RUBY'
+class C
+  def go(x)
+    x
+  end
+end
+RUBY
+  cat > "$WS_STAND/gen/keep.rb" <<'RUBY'
+class Keep
+  def go(x)
+    x
+  end
+end
+RUBY
+  cat > "$WS_STAND/lib/tasks/db.rake" <<'RUBY'
+task :db do
+  puts "db"
+end
+RUBY
+  cat > "$WS_STAND/Rakefile" <<'RUBY'
+task :default do
+  puts "default"
+end
+RUBY
+  cat > "$WS_STAND/node_modules/x.rb" <<'RUBY'
+class X
+  def go(x)
+    x
+  end
+end
+RUBY
+  cat > "$WS_STAND/vendor/y.rb" <<'RUBY'
+class Y
+  def go(x)
+    x
+  end
+end
+RUBY
+  _rbs_bundle "$WS_STAND" || return 1
+  return 0
+}
+# mk_rb40_stand — Ruby 4.0 + gem 1.6.2 + live daemon project (2H.1).
+# A real consumer Gemfile on the path gem (gemspec alone gives bundler no
+# installable docscribe — proven 2026-09-13). Runs under rbenv 4.0.6 via
+# .ruby-version. Probed: bundle install clean, docscribe 1.6.2 boots.
+RB40_STAND="/tmp/rb40-stand"
+mk_rb40_stand() {
+  rm -rf "$RB40_STAND"
+  mkdir -p "$RB40_STAND"
+  cat > "$RB40_STAND/Gemfile" <<EOF
+source "https://rubygems.org"
+gem "docscribe", path: "$HOME/docscribe"
+gem "rbs", require: false
+EOF
+  printf '4.0.6\n' > "$RB40_STAND/.ruby-version"
+  cat > "$RB40_STAND/widget.rb" <<'RUBY'
+class Widget
+  # Adds two numbers.
+  # @param [Integer] a first.
+  # @param [Integer] b second.
+  # @return [Integer] sum.
+  def add(a, b)
+    a + b
+  end
+end
+RUBY
+  (cd "$RB40_STAND" && RBENV_VERSION=4.0.6 rbenv exec bundle install --quiet 2>&1 | tail -n 3) \
+    || return 1
+  return 0
+}
+# mk_nogem_stand — project WITHOUT the docscribe gem (2H.7 troubleshooting).
+NOGEM_STAND="/tmp/nogem-stand"
+mk_nogem_stand() {
+  rm -rf "$NOGEM_STAND"
+  mkdir -p "$NOGEM_STAND"
+  printf 'source "https://rubygems.org"\ngem "rake"\n' > "$NOGEM_STAND/Gemfile"
+  printf 'def hello(name)\n  "hi"\nend\n' > "$NOGEM_STAND/foo.rb"
+  (cd "$NOGEM_STAND" && bundle install --quiet >/dev/null 2>&1)
+  return 0
+}
 # mk_vt_stand — validate-types project with an invalid YARD type.
 mk_vt_stand() {
   rm -rf "$VT_STAND"

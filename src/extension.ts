@@ -161,6 +161,21 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(outputChannel, statusBarItem);
 
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  // Card 554: re-probe on every folder change, not just first activate.
+  // The old code cached one verdict forever: a trust-off Restricted window
+  // (no Gemfile visible) poisoned every later window in the session, so
+  // commands died with "No Gemfile found in project tree" (proven
+  // 2026-09-14: 2f2 CLI fallback). Stale verdicts are worse than a probe.
+  const folderWatcher = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (root) {
+      gemChecked = false;
+      checkGemInstalled(root).then((installed) => {
+        gemChecked = true;
+        gemInstalled = installed;
+      });
+    }
+  });
   if (workspaceRoot) {
     checkGemInstalled(workspaceRoot).then((installed) => {
       gemChecked = true;
@@ -234,7 +249,12 @@ export function activate(context: vscode.ExtensionContext) {
                 if (caps?.hasBatchMode && useServer) {
                   const serverRunning = await ensureServerRunning(projectRoot);
                   if (serverRunning && !token.isCancellationRequested) {
-                    const allFiles = collectWorkspaceFiles(projectRoot);
+                    // Card 553: the ignorePatterns setting gates the daemon
+                    // batch path too (previously single-file checks only).
+                    const ignorePatterns = vscode.workspace
+                      .getConfiguration('docscribe')
+                      .get<string[]>('ignorePatterns', []);
+                    const allFiles = collectWorkspaceFiles(projectRoot, 5000, ignorePatterns);
                     if (allFiles.length === 0) {
                       const empty = JSON.stringify({
                         metadata: { docscribe_version: caps.version },
@@ -445,7 +465,14 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   const doctorCmd = vscode.commands.registerCommand('docscribe.doctor', async () => {
-    const channel = vscode.window.createOutputChannel('DocScribe Doctor');
+    // Card 556: dedicated channel name. The old 'DocScribe Doctor' collided
+    // with the results channel 'DocScribe' in VS Code's channel picker
+    // (substring match): every Doctor invocation hijacked the results
+    // channel, so subsequent workspace-check JSON rendered into the Doctor
+    // channel and driver oracles hunting the DocScribe channel saw STALE
+    // JSON from earlier cases (proven 2026-09-14: 2g3 kept seeing 3-file
+    // JSON without gen/keep.rb although the batch returned 4 files).
+    const channel = vscode.window.createOutputChannel('DocScribe Doctor Report');
     channel.clear();
     channel.appendLine(await buildDoctorReport());
     channel.show();
@@ -465,6 +492,7 @@ export function activate(context: vscode.ExtensionContext) {
     updateTypesCmd,
     updateTypesForFileCmd,
     doctorCmd,
+    folderWatcher,
   );
 
   // Language-model tools for AI agents (card 469).

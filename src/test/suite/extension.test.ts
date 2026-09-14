@@ -122,6 +122,14 @@ suite('DocScribe Extension', () => {
   });
 
   suite('folding ranges (card 512)', () => {
+    test('re-probes gem gate on workspace folder change (card 554)', () => {
+      const extSrc = fs.readFileSync(
+        path.resolve(__dirname, '..', '..', '..', 'src', 'extension.ts'),
+        'utf8',
+      );
+      assert.ok(extSrc.includes('onDidChangeWorkspaceFolders'));
+      assert.ok(extSrc.includes('gemChecked = false'));
+    });
     test('detects comment blocks of 3+ lines', async () => {
       const filePath = path.join(fixturesDir, `qa512-fold-${Date.now()}.rb`);
       fs.writeFileSync(filePath, 'class A\n  # one\n  # two\n  # three\n  def foo\n  end\nend\n');

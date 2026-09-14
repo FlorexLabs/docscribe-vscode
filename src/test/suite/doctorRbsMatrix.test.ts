@@ -779,6 +779,59 @@ suite('doctorRbsMatrix (QA 2D/2E/2H)', () => {
       }
     });
 
+    test('pre-start socket/pid rows (2H.4, GUI-unreachable)', async () => {
+      // The "not determined"/"unknown" rows render only in an extension
+      // host that never ran a check — unreachable via GUI (activate()
+      // fire-and-forget spawns the daemon on launch; proven 2026-09-13).
+      // Pinned here; the driver covers the live/respawned path (2h4).
+      const root = makeRoot();
+      const restoreFolders = fakeWorkspace(root);
+      try {
+        writeFile(root, 'Gemfile', 'source "https://rubygems.org"\n');
+        stubDoctorConfig({ useRbs: false, validateTypes: true, useServer: true });
+        const captured: CapturedCall[] = [];
+        stubExec({ version: 'ruby 3.2.0 (test)', mainStdout: '{}', captured });
+        const caps = parseCapabilities('1.6.2');
+        assert.ok(caps);
+        (sinon.stub(runnerReal, 'ensureFreshCapabilities') as unknown as sinon.SinonStub).resolves(
+          caps,
+        );
+        setSocketPathForTesting(null);
+        const report = await buildDoctorReport();
+        assert.ok(report.includes('  Socket: not determined (daemon not started yet)'));
+        assert.ok(report.includes('  Daemon PID: unknown'));
+      } finally {
+        restoreFolders();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('doctor channel name avoids results-channel collision (card 556)', () => {
+      // The results channel is 'DocScribe'; the Doctor channel must NOT be
+      // a string that VS Code's channel picker can confuse with it.
+      // 'DocScribe Doctor' collided (substring/prefix match): Doctor output
+      // hijacked the results channel and stale workspace JSON haunted later
+      // driver oracles (proven 2026-09-14: 2g3). Pinned statically.
+      const extSrc = fs.readFileSync(
+        path.resolve(__dirname, '..', '..', '..', 'src', 'extension.ts'),
+        'utf8',
+      );
+      const m = extSrc.match(/createOutputChannel\('([^']+)'\)/g) || [];
+      const names = m.map((s) => s.slice(20, -2));
+      assert.ok(names.includes('DocScribe'), 'results channel exists');
+      for (const n of names) {
+        if (n === 'DocScribe') continue;
+        assert.ok(
+          !n.startsWith('DocScribe ') && !'DocScribe '.startsWith(n),
+          `channel '${n}' collides with results channel 'DocScribe'`,
+        );
+      }
+      assert.ok(
+        names.some((n) => n.includes('Doctor')),
+        'a Doctor channel still exists',
+      );
+    });
+
     test('disabled RBS bare string with CLI fallback backend', async () => {
       const root = makeRoot();
       const restoreFolders = fakeWorkspace(root);
@@ -869,6 +922,46 @@ suite('doctorRbsMatrix (QA 2D/2E/2H)', () => {
           if (savedLc === undefined) delete process.env.LC_ALL;
           else process.env.LC_ALL = savedLc;
         }
+      } finally {
+        restoreFolders();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('Ruby row honors the configured rubyPath (2H.1)', async () => {
+      const root = makeRoot();
+      const restoreFolders = fakeWorkspace(root);
+      try {
+        writeFile(root, 'Gemfile', 'source "https://rubygems.org"\n');
+        stubDoctorConfig({ rubyPath: '/opt/rubies/4.0.6/bin/ruby' });
+        const captured: CapturedCall[] = [];
+        stubExec({ version: null, mainStdout: '{}', captured });
+        const rubyCalls: string[] = [];
+        const realExec = childProcess.execFile as unknown as sinon.SinonStub;
+        realExec.callsFake((...raw: unknown[]) => {
+          const [cmd, args, third, fourth] = raw as [unknown, unknown, unknown, unknown];
+          const cb = (typeof third === 'function' ? third : fourth) as (
+            err: Error | null,
+            stdout: string,
+            stderr: string,
+          ) => void;
+          const argList = Array.isArray(args) ? (args as string[]) : [];
+          if (argList.includes('--version') && !argList.includes('docscribe')) {
+            rubyCalls.push(String(cmd));
+            cb(null, 'ruby 4.0.6 (test)\n', '');
+            return undefined;
+          }
+          cb(null, '{}', '');
+          return undefined;
+        });
+        const caps = parseCapabilities('1.6.2');
+        assert.ok(caps);
+        (sinon.stub(runnerReal, 'ensureFreshCapabilities') as unknown as sinon.SinonStub).resolves(
+          caps,
+        );
+        const report = await buildDoctorReport();
+        assert.ok(report.includes('Ruby: ruby 4.0.6 (test)'));
+        assert.ok(rubyCalls.includes('/opt/rubies/4.0.6/bin/ruby'));
       } finally {
         restoreFolders();
         fs.rmSync(root, { recursive: true, force: true });

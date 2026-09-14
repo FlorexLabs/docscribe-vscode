@@ -19,6 +19,7 @@ import {
   loadFileFilterPatterns,
   loadGitignorePatterns,
   ensureRbsGemLine,
+  getCommandArgs,
 } from '../../docscribeRunner';
 
 const fixturesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'test', 'suite', 'fixtures');
@@ -397,6 +398,11 @@ suite('docscribeRunner', () => {
       assert.strictEqual(matchFilePattern('/_spec\\.rb$/', 'spec/a_spec.rb'), true);
       assert.strictEqual(matchFilePattern('/_spec\\.rb$/', 'lib/a.rb'), false);
       assert.strictEqual(matchFilePattern('**/.hidden.rb', '.hidden.rb'), true);
+      // Card 555: trailing /**/* also matches the dir itself, so file
+      // negations (gen/keep.rb vs ignore gen/**/*) can un-ignore it.
+      assert.strictEqual(matchFilePattern('gen/**/*', 'gen/keep.rb'), true);
+      assert.strictEqual(matchFilePattern('gen/**/*', 'gen/c.rb'), true);
+      assert.strictEqual(matchFilePattern('gen/**/*', 'lib/a.rb'), false);
     });
 
     test('processFileByFilter: exclude wins, empty include means all', () => {
@@ -510,6 +516,52 @@ suite('docscribeRunner', () => {
 
     test('handles empty array', () => {
       assert.deepStrictEqual(chunkArray([], 32), []);
+    });
+  });
+
+  suite('getCommandArgs updateTypes (card 552)', () => {
+    test('updateTypes has no --format flag (gem rejects it)', () => {
+      const args = getCommandArgs('updateTypes', true, true, false, 'widget.rb', true, true);
+      assert.ok(args.includes('update_types'));
+      assert.ok(!args.includes('--format'));
+      assert.ok(!args.includes('json'));
+    });
+
+    test('updateTypes carries no mode flags (gem rejects -A/-k/-B)', () => {
+      const args = getCommandArgs('updateTypes', true, true, true, 'widget.rb', true, true);
+      assert.ok(!args.includes('-A'));
+      assert.ok(!args.includes('-k'));
+      assert.ok(!args.includes('-B'));
+    });
+
+    test('updateTypes target with rbs, collection and validate flags', () => {
+      const args = getCommandArgs('updateTypes', true, true, false, 'widget.rb', true, true);
+      assert.deepStrictEqual(args, [
+        'update_types',
+        '--rbs',
+        '--rbs-collection',
+        '--validate-types',
+        'widget.rb',
+      ]);
+    });
+
+    test('updateTypes --no-validate-types when disabled', () => {
+      const args = getCommandArgs('updateTypes', true, false, false, 'f.rb', false, false);
+      assert.ok(args.includes('--no-validate-types'));
+      assert.ok(!args.includes('--format'));
+    });
+
+    test('check keeps --format json', () => {
+      const args = getCommandArgs('check', true, false, false, 'f.rb', undefined, false);
+      assert.ok(args.includes('--format'));
+      assert.ok(args.includes('json'));
+    });
+
+    test('updateTypes workspace call carries no file arg (always CLI)', () => {
+      const args = getCommandArgs('updateTypes', true, true, false, undefined, true, true);
+      assert.ok(!args.includes('--format'));
+      assert.ok(args.includes('update_types'));
+      assert.ok(args.includes('--rbs'));
     });
   });
 });

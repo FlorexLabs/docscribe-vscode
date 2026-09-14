@@ -78,12 +78,33 @@ print('\n'.join(hits))
 sys.exit(0 if hits else 1)
 "
 }
+# panel_top <tag> [header] — scroll a panel to its top.
+# `pageup N` from an unknown offset does NOT guarantee the top (proven
+# 2026-09-13: 2h4 hunted from mid-report and looped the bottom half
+# forever, hanging the whole run). Scroll until HEADER is visible, then
+# stop. Default header matches Doctor/Problems/Output generically; pass
+# an explicit one when the panel content is JSON without headers
+# (proven 2026-09-14: workspace JSON has no "Output" word in-viewport).
+# No pixel/text equality: live badges and the clock repaint every shot
+# (proven 2026-09-14: 3 identical-viewport shots, 3 different md5s).
+# Best-effort: always returns 0.
+panel_top() {
+  local i header="${2:-DocScribe Doctor|DocScribe version|^Problems$|^Output$}"
+  for (( i = 1; i <= 15; i++ )); do
+    shot "$1-$i"
+    if ocr_text | grep -qiE "$header"; then
+      return 0
+    fi
+    pageup 2
+  done
+  return 0
+}
 # panelhunt <tag> <pattern> [max=12] — dochunt confined to the panel area.
 # dochunt greps fullscreen (explorer/tab titles false-green, proven 2c8);
 # panelhunt greps below the panel tab row only. Needs actions.sh sourced.
 panelhunt() {
   local max="${3:-12}" i
-  pageup 8
+  panel_top "$1-top"
   for (( i = 1; i <= max; i++ )); do
     shot "$1-p$i"
     if panel_grep "$LAST_SHOT" "$2"; then
@@ -93,12 +114,85 @@ panelhunt() {
   done
   echo "panel miss for /$2/ ($1)" >&2; return 1
 }
+# pathhunt <tag> <stem> [max=12] — panelhunt for a workspace JSON path.
+# Workspace Output wraps paths across OCR lines ("lib/a." + "rb", "tasks/db."
+# + "rake") and the anchor word ("ws-stand") sits lines above the tail, so
+# a single grep for "lib/a" NEVER matches (proven 2026-09-14: 2g2-2g6 red
+# while the files were present). Splits the stem on "/" and requires every
+# segment to appear in the SAME viewport (order-insensitive within a shot:
+# segments of one path always co-occur on screen). The JSON metadata header
+# ("docscribe_version") pins the top instead of the generic panel words.
+# Needs actions.sh sourced.
+pathhunt() {
+  local max="${3:-12}" i seg ok
+  panel_top "$1-top" "docscribe_version"
+  for (( i = 1; i <= max; i++ )); do
+    shot "$1-p$i"
+    ok=1
+    for seg in $(echo "$2" | tr '/' ' '); do
+      if ! panel_grep "$LAST_SHOT" "$seg" >/dev/null 2>&1; then
+        ok=0; break
+      fi
+    done
+    if [[ $ok -eq 1 ]]; then
+      return 0
+    fi
+    down 3
+  done
+  echo "path miss for /$2/ ($1)" >&2; return 1
+}
+# path_absent <tag> <stem> [max=12] — panel_absent for a workspace JSON path.
+# Same wrap/fragmentation problem as pathhunt: a forbidden single-grep for
+# "spec/b_spec" never fires even when the file IS present split across two
+# lines ("spec/" + "b_spec"), so leaks pass silently (proven 2026-09-14:
+# 2g-absence oracles were vacuous). Fails when ALL stem segments co-occur
+# in one viewport. Needs actions.sh sourced.
+path_absent() {
+  local max="${3:-12}" i seg found
+  panel_top "$1-top" "docscribe_version"
+  for (( i = 1; i <= max; i++ )); do
+    shot "$1-a$i"
+    found=1
+    for seg in $(echo "$2" | tr '/' ' '); do
+      if ! panel_grep "$LAST_SHOT" "$seg" >/dev/null 2>&1; then
+        found=0; break
+      fi
+    done
+    if [[ $found -eq 1 ]]; then
+      echo "forbidden /$2/ visible ($1-a$i)" >&2; return 1
+    fi
+    down 3
+  done
+  return 0
+}
+# panel_absent <tag> <pattern> [max=12] — assert a pattern appears NOWHERE
+# in the panel across the full scroll range. A single-viewport absence
+# proves nothing when the content (workspace JSON) spans screens (proven
+# 2026-09-13: 2g3 viewport sat on keep.rb while lib/a.rb lived off-screen).
+# Needs actions.sh sourced.
+panel_absent() {
+  local max="${3:-12}" i rc
+  panel_top "$1-top"
+  for (( i = 1; i <= max; i++ )); do
+    shot "$1-a$i"
+    panel_grep "$LAST_SHOT" "$2"
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+      echo "forbidden /$2/ visible ($1-a$i)" >&2; return 1
+    fi
+    if [[ $rc -eq 2 ]]; then
+      echo "no panel tabs in $1-a$i" >&2; return 2
+    fi
+    down 3
+  done
+  return 0
+}
 # dochunt <tag> <pattern> [forbidden] [max=12] — walk the Output panel down
 # from the top with overlapping down-arrow steps (page steps can straddle a
 # 1-line target exactly on the viewport boundary). Needs actions.sh sourced.
 dochunt() {
   local max="${4:-12}" i
-  pageup 8
+  panel_top "$1-top"
   for (( i = 1; i <= max; i++ )); do
     shot "$1-p$i"
     if ocr_text | grep -qiE "$2"; then

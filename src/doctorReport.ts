@@ -8,7 +8,7 @@ import { getSocketPath, readPid, isProcessAlive } from './docscribeClient';
  * Build the Doctor diagnostics report as plain text.
  *
  * Shared by the `docscribe.doctor` command (shown in the
- * `DocScribe Doctor` output channel) and the `docscribe_doctor`
+ * `DocScribe Doctor Report` output channel) and the `docscribe_doctor`
  * language-model tool (returned as text to the agent).
  *
  * @returns Multi-line report: Ruby, project root, gem version,
@@ -19,8 +19,11 @@ export async function buildDoctorReport(): Promise<string> {
   const lines: string[] = ['=== DocScribe Doctor ===', ''];
 
   try {
+    const rubyPath = vscode.workspace.getConfiguration('docscribe').get<string>('rubyPath', 'ruby');
     const rubyResult = await new Promise<string>((resolve) => {
-      execFile('ruby', ['--version'], (err: Error | null, stdout: string) => {
+      // Card 2H.1: honor the configured interpreter (default PATH ruby),
+      // so Doctor observes the same Ruby the daemon path uses.
+      execFile(rubyPath, ['--version'], (err: Error | null, stdout: string) => {
         resolve(err ? 'Not found' : stdout.trim());
       });
     });

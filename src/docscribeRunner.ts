@@ -192,6 +192,11 @@ export function matchFilePattern(pattern: string, relPath: string): boolean {
   }
   const candidates = [pattern];
   if (pattern.includes('/**/')) candidates.push(pattern.replace(/\/\*\*\//g, '/'));
+  // Card 555: a trailing `/**/*` must also match the dir itself
+  // (`gen/**/*` vs `gen/keep.rb` is FALSE in minimatch — the `**` needs at
+  // least the slash; the negation path then never un-ignores the file).
+  // Proven 2026-09-14: 2g3, gen/keep.rb missing from workspace Output.
+  if (pattern.endsWith('/**/*')) candidates.push(pattern.slice(0, -'/**/*'.length));
   return candidates.some((c) => minimatch(relPath, c, { dot: true }));
 }
 
@@ -395,9 +400,16 @@ export function loadGitignorePatterns(projectRoot: string): GitignorePatterns {
  *
  * @param projectRoot - Absolute project root (contains `Gemfile`).
  * @param maxFiles - Hard limit to avoid pathological walks.
+ * @param ignorePatterns - `docscribe.ignorePatterns` setting (same semantics
+ *   as the single-file `isIgnored` gate: matched against the absolute path,
+ *   card 553). Empty by default (pure yml/gitignore filtering).
  * @returns Sorted list of absolute file paths.
  */
-export function collectWorkspaceFiles(projectRoot: string, maxFiles = 5000): string[] {
+export function collectWorkspaceFiles(
+  projectRoot: string,
+  maxFiles = 5000,
+  ignorePatterns: string[] = [],
+): string[] {
   const files: string[] = [];
   const excludeDirs = new Set([
     '.git',
@@ -446,6 +458,8 @@ export function collectWorkspaceFiles(projectRoot: string, maxFiles = 5000): str
           entry.name === 'Rakefile'
         ) {
           const rel = toPosix(fullPath);
+          // VSCode setting gate (card 553): same predicate as isIgnored.
+          if (ignorePatterns.some((p) => minimatch(fullPath, p, { dot: true }))) continue;
           if (gitignore.ignore.some((p) => matchFilePattern(p, rel))) {
             if (!gitignore.negate.some((p) => matchFilePattern(p, rel))) continue;
           }
@@ -696,8 +710,13 @@ export function resolveRbsContext(projectRoot: string, caps: Capabilities | null
  *   the flag entirely — old gems reject unknown flags).
  * @param hasCollection - Whether `rbs_collection.lock.yaml` exists.
  * @returns An array of CLI argument strings.
+ *
+ * NOTE (card 552): `update_types` accepts no mode/output flags (the gem
+ * rejects `-A`/`-k`/`-B`/`--format`), so for that strategy only the
+ * subcommand + target + rbs/validate flags are emitted. Daemon path
+ * unaffected (RPC, no CLI flags).
  */
-function getCommandArgs(
+export function getCommandArgs(
   strategy: string,
   json: boolean,
   useRbs: boolean,
@@ -714,9 +733,11 @@ function getCommandArgs(
   } else if (strategy === 'aggressive') {
     args.push('-A', '-k');
   } else if (strategy === 'updateTypes') {
-    args.push('update_types', '-A', '-k');
+    // update_types is two-pass internally (aggressive then safe) and takes
+    // no mode flags: -A/-k/-B/--format are all rejected by the gem.
+    args.push('update_types');
   }
-  if (json && (strategy === 'check' || strategy === 'updateTypes')) {
+  if (json && strategy === 'check') {
     args.push('--format', 'json');
   }
   if (useRbs) {
@@ -725,7 +746,7 @@ function getCommandArgs(
   }
   if (validateTypes === true) args.push('--validate-types');
   else if (validateTypes === false) args.push('--no-validate-types');
-  if (omitBoilerplate) {
+  if (omitBoilerplate && strategy !== 'updateTypes') {
     args.push('-B');
   }
   if (filePath) {

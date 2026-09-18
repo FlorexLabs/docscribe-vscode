@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { DocscribeCodeActionProvider } from '../../codeActionProvider';
+import { setDiagnosticSourceForTesting } from '../../diagnosticProvider';
 
 suite('codeActionProvider', () => {
   let provider: DocscribeCodeActionProvider;
@@ -99,6 +100,46 @@ suite('codeActionProvider', () => {
       assert.strictEqual(result[1].title, 'DocScribe: Issue 2');
       assert.strictEqual(result[2].title, 'DocScribe: fix all in file (safe)');
       assert.strictEqual(result[3].title, 'DocScribe: fix all in file (aggressive)');
+    });
+
+    test('routes rbs-source diagnostic to Update Types', () => {
+      const diag = {
+        source: 'docscribe',
+        message: 'invalid YARD type',
+      } as unknown as vscode.Diagnostic;
+      setDiagnosticSourceForTesting(diag, 'rbs');
+      const context = { diagnostics: [diag] } as unknown as vscode.CodeActionContext;
+
+      const result = provider.provideCodeActions(
+        { uri: { fsPath: '/test.rb' } } as unknown as vscode.TextDocument,
+        {} as unknown as vscode.Range,
+        context,
+        {} as unknown as vscode.CancellationToken,
+      );
+
+      assert.ok(result);
+      assert.ok(result[0].title.startsWith('DocScribe: Update Types from RBS'));
+      assert.strictEqual(result[0].command?.command, 'docscribe.updateTypesForFile');
+      assert.strictEqual(result[0].diagnostics?.length, 1);
+    });
+
+    test('routes infer-source diagnostic to direct fix', () => {
+      const diag = {
+        source: 'docscribe',
+        message: 'Missing documentation',
+      } as unknown as vscode.Diagnostic;
+      setDiagnosticSourceForTesting(diag, 'infer');
+      const context = { diagnostics: [diag] } as unknown as vscode.CodeActionContext;
+
+      const result = provider.provideCodeActions(
+        { uri: { fsPath: '/test.rb' } } as unknown as vscode.TextDocument,
+        {} as unknown as vscode.Range,
+        context,
+        {} as unknown as vscode.CancellationToken,
+      );
+
+      assert.ok(result);
+      assert.strictEqual(result[0].command?.command, 'docscribe.applyFix');
     });
   });
 });

@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseJsonOutput } from '../../diagnosticProvider';
+import { parseJsonOutput, clampLine } from '../../diagnosticProvider';
 
 const fixturesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'test', 'suite', 'fixtures');
 
@@ -67,6 +67,96 @@ suite('diagnosticProvider', () => {
       assert.ok(file);
       assert.strictEqual(file.issues[0].line, 5);
       assert.strictEqual(file.issues[0].copName, 'Docscribe/MissingParam');
+    });
+
+    test('keeps change source on issues', () => {
+      const output = JSON.stringify({
+        metadata: { docscribe_version: '1.6.2', ruby_version: '4.0.3' },
+        files: [
+          {
+            path: 'app/models/user.rb',
+            offenses: [
+              {
+                severity: 'convention',
+                cop_name: 'DocScribe/MissingDocumentation',
+                message: 'Missing YARD documentation',
+                corrected: false,
+                correctable: true,
+                source: 'rbs',
+                location: { start_line: 2, start_column: 1, last_line: 2, last_column: 1 },
+              },
+              {
+                severity: 'convention',
+                cop_name: 'DocScribe/MissingDocumentation',
+                message: 'Missing YARD documentation',
+                corrected: false,
+                correctable: true,
+                location: { start_line: 5, start_column: 1, last_line: 5, last_column: 1 },
+              },
+            ],
+          },
+        ],
+        summary: {
+          offense_count: 2,
+          target_file_count: 1,
+          inspected_file_count: 1,
+          error_count: 0,
+        },
+      });
+      const result = parseJsonOutput(output);
+      const file = result.get('app/models/user.rb');
+      assert.ok(file);
+      assert.strictEqual(file.issues[0].source, 'rbs');
+      assert.strictEqual(file.issues[1].source, undefined);
+    });
+
+    test('keeps InvalidType offense for warning mapping', () => {
+      const output = JSON.stringify({
+        metadata: { docscribe_version: '1.6.2', ruby_version: '4.0.3' },
+        files: [
+          {
+            path: 'app/models/user.rb',
+            offenses: [
+              {
+                severity: 'warning',
+                cop_name: 'Docscribe/InvalidType',
+                message: 'invalid YARD type [String] for @param name',
+                corrected: false,
+                correctable: true,
+                location: { start_line: 3, start_column: 1, last_line: 3, last_column: 1 },
+              },
+            ],
+          },
+        ],
+        summary: {
+          offense_count: 1,
+          target_file_count: 1,
+          inspected_file_count: 1,
+          error_count: 0,
+        },
+      });
+      const result = parseJsonOutput(output);
+      const file = result.get('app/models/user.rb');
+      assert.ok(file);
+      assert.strictEqual(file.issues.length, 1);
+      assert.strictEqual(file.issues[0].copName, 'Docscribe/InvalidType');
+      assert.strictEqual(file.issues[0].severity, 'warning');
+      assert.strictEqual(file.issues[0].line, 3);
+    });
+  });
+
+  suite('clampLine', () => {
+    test('converts 1-based to 0-based within range', () => {
+      assert.strictEqual(clampLine(3, 8), 2);
+    });
+
+    test('clamps out-of-range lines to the last line (2e5 lineAt crash)', () => {
+      assert.strictEqual(clampLine(19, 8), 7);
+    });
+
+    test('clamps zero and negative lines to zero', () => {
+      assert.strictEqual(clampLine(0, 8), 0);
+      assert.strictEqual(clampLine(-4, 8), 0);
     });
   });
 });

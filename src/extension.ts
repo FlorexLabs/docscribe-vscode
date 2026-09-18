@@ -4,30 +4,73 @@ import * as fs from 'fs';
 import {
   runDocscribe,
   findProjectRoot,
-  detectCapabilities,
-  getCachedCapabilities,
+  ensureFreshCapabilities,
   checkGemInstalled,
   collectWorkspaceFiles,
   chunkArray,
+  resolveRbsContext,
+  gemfileHasRbs,
+  ensureRbsGemLine,
   type RunResult,
 } from './docscribeRunner';
-import { execFile } from './execAsync';
 import { createDiagnosticProvider, checkDocument } from './diagnosticProvider';
 import { DocscribeCodeActionProvider, applyFix } from './codeActionProvider';
 import { DocscribeFoldingRangeProvider, getCommentBlockStartLines } from './foldingProvider';
-import {
-  ensureServerRunning,
-  stopServer,
-  checkBatchViaServer,
-  getSocketPath,
-  readPid,
-  isProcessAlive,
-} from './docscribeClient';
+import { ensureServerRunning, stopServer, checkBatchViaServer } from './docscribeClient';
+import { buildDoctorReport } from './doctorReport';
+import { registerLmTools } from './lmTools';
 
 let outputChannel: vscode.OutputChannel;
 let statusBarItem: vscode.StatusBarItem;
 let gemChecked = false;
 let gemInstalled = true;
+let rbsBalloonShown = false;
+
+/** Reset the once-per-session RBS balloon flag. Exported for tests only. */
+export function resetRbsBalloonForTesting(): void {
+  rbsBalloonShown = false;
+}
+
+// Missing-`rbs` balloon (card 466): `useRbs` on but no `rbs` gem —
+// unlike the docscribe-missing balloon this one is opt-in UX noise,
+// so it shows once per session and offers a one-click Gemfile fix.
+// Module-level (not nested in activate) so tests can drive it directly
+// without a fake ExtensionContext.
+export function checkMissingRbsGem(workspaceRoot: string): void {
+  if (rbsBalloonShown) return;
+  const config = vscode.workspace.getConfiguration('docscribe');
+  if (!config.get<boolean>('useRbs', false)) return;
+  const projectRoot = findProjectRoot(workspaceRoot) ?? workspaceRoot;
+  const gemfilePath = path.join(projectRoot, 'Gemfile');
+  if (gemfileHasRbs(gemfilePath)) return;
+  rbsBalloonShown = true;
+  vscode.window
+    .showWarningMessage(
+      'DocScribe: RBS type inference is enabled but the `rbs` gem is missing.',
+      'Add rbs to Gemfile',
+    )
+    .then((selection) => {
+      if (selection !== 'Add rbs to Gemfile') return;
+      let content: string;
+      try {
+        content = fs.readFileSync(gemfilePath, 'utf8');
+      } catch {
+        vscode.window.showErrorMessage('DocScribe: cannot read Gemfile');
+        return;
+      }
+      const updated = ensureRbsGemLine(content);
+      if (updated === null) return;
+      try {
+        fs.writeFileSync(gemfilePath, updated);
+      } catch {
+        vscode.window.showErrorMessage('DocScribe: cannot write Gemfile');
+        return;
+      }
+      vscode.window.showInformationMessage(
+        'DocScribe: `gem "rbs"` added to Gemfile. Run `bundle install` to apply.',
+      );
+    });
+}
 
 export function updateStatusBar(result: RunResult | null): void {
   if (!result) {
@@ -47,10 +90,22 @@ export function updateStatusBar(result: RunResult | null): void {
   }
 }
 
-async function withProgress<T>(title: string, task: () => Promise<T>): Promise<T> {
+/** Current status-bar text (exported for tests, card 511). */
+export function getStatusBarTextForTesting(): string {
+  return statusBarItem ? statusBarItem.text : '';
+}
+
+async function withProgress<T>(
+  title: string,
+  task: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
   return vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title, cancellable: false },
-    task,
+    { location: vscode.ProgressLocation.Notification, title, cancellable: true },
+    (_progress, token) => {
+      const controller = new AbortController();
+      token.onCancellationRequested(() => controller.abort());
+      return task(controller.signal);
+    },
   );
 }
 
@@ -63,7 +118,13 @@ function requireRubyFile(): boolean {
   return true;
 }
 
-function showResult(result: RunResult): void {
+/** Rendered for tests (card 510): status update + error/cancelled toasts. */
+export function showResult(result: RunResult): void {
+  if (result.cancelled) {
+    updateStatusBar(null);
+    vscode.window.showInformationMessage('DocScribe: cancelled');
+    return;
+  }
   outputChannel.clear();
   if (result.stdout) outputChannel.appendLine(result.stdout);
   if (result.stderr) outputChannel.appendLine(result.stderr);
@@ -86,14 +147,9 @@ export function activate(context: vscode.ExtensionContext) {
   if (workspaceFolders && workspaceFolders.length > 0) {
     const root = findProjectRoot(workspaceFolders[0].uri.fsPath);
     if (root) {
-      const cached = getCachedCapabilities();
-      if (cached) {
-        if (cached.hasServerMode) ensureServerRunning(root);
-      } else {
-        detectCapabilities(root).then((caps) => {
-          if (caps?.hasServerMode) ensureServerRunning(root);
-        });
-      }
+      ensureFreshCapabilities(root).then((caps) => {
+        if (caps?.hasServerMode) ensureServerRunning(root);
+      });
     }
   }
 
@@ -105,6 +161,21 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(outputChannel, statusBarItem);
 
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  // Card 554: re-probe on every folder change, not just first activate.
+  // The old code cached one verdict forever: a trust-off Restricted window
+  // (no Gemfile visible) poisoned every later window in the session, so
+  // commands died with "No Gemfile found in project tree" (proven
+  // 2026-09-14: 2f2 CLI fallback). Stale verdicts are worse than a probe.
+  const folderWatcher = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (root) {
+      gemChecked = false;
+      checkGemInstalled(root).then((installed) => {
+        gemChecked = true;
+        gemInstalled = installed;
+      });
+    }
+  });
   if (workspaceRoot) {
     checkGemInstalled(workspaceRoot).then((installed) => {
       gemChecked = true;
@@ -121,9 +192,13 @@ export function activate(context: vscode.ExtensionContext) {
               vscode.commands.executeCommand('vscode.open', vscode.Uri.file(gemfilePath));
             }
           });
+      } else {
+        checkMissingRbsGem(workspaceRoot);
       }
     });
   }
+
+  // Missing-`rbs` balloon (card 466): see module-level checkMissingRbsGem.
 
   function ensureGemInstalled(): boolean {
     if (gemChecked && !gemInstalled) {
@@ -138,8 +213,8 @@ export function activate(context: vscode.ExtensionContext) {
   const checkFileCmd = vscode.commands.registerCommand('docscribe.checkFile', async () => {
     if (!requireRubyFile() || !ensureGemInstalled()) return;
     const editor = vscode.window.activeTextEditor;
-    const result = await withProgress('DocScribe: checking file...', () =>
-      runDocscribe({ strategy: 'check' }),
+    const result = await withProgress('DocScribe: checking file...', (signal) =>
+      runDocscribe({ strategy: 'check', signal }),
     );
     showResult(result);
     if (editor) {
@@ -158,20 +233,28 @@ export function activate(context: vscode.ExtensionContext) {
           cancellable: true,
         },
         async (progress, token) => {
+          const controller = new AbortController();
+          token.onCancellationRequested(() => controller.abort());
+          const signal = controller.signal;
           // Try server batch mode (check_batch) when available
           try {
             const folders = vscode.workspace.workspaceFolders;
             if (folders && folders.length > 0) {
               const projectRoot = findProjectRoot(folders[0].uri.fsPath);
               if (projectRoot) {
-                const caps = getCachedCapabilities() || (await detectCapabilities(projectRoot));
+                const caps = await ensureFreshCapabilities(projectRoot);
                 const useServer = vscode.workspace
                   .getConfiguration('docscribe')
                   .get<boolean>('useServer', true);
                 if (caps?.hasBatchMode && useServer) {
                   const serverRunning = await ensureServerRunning(projectRoot);
                   if (serverRunning && !token.isCancellationRequested) {
-                    const allFiles = collectWorkspaceFiles(projectRoot);
+                    // Card 553: the ignorePatterns setting gates the daemon
+                    // batch path too (previously single-file checks only).
+                    const ignorePatterns = vscode.workspace
+                      .getConfiguration('docscribe')
+                      .get<string[]>('ignorePatterns', []);
+                    const allFiles = collectWorkspaceFiles(projectRoot, 5000, ignorePatterns);
                     if (allFiles.length === 0) {
                       const empty = JSON.stringify({
                         metadata: { docscribe_version: caps.version },
@@ -186,6 +269,7 @@ export function activate(context: vscode.ExtensionContext) {
                       return {
                         success: true,
                         hasIssues: false,
+                        cancelled: false,
                         exitCode: 0,
                         stdout: empty,
                         stderr: '',
@@ -193,6 +277,7 @@ export function activate(context: vscode.ExtensionContext) {
                       } as RunResult;
                     }
                     const chunks = chunkArray(allFiles, 32);
+                    const rbs = resolveRbsContext(projectRoot, caps);
                     let totalOffense = 0;
                     let totalTarget = 0;
                     let totalInspected = 0;
@@ -206,7 +291,7 @@ export function activate(context: vscode.ExtensionContext) {
                         increment: (1 / chunks.length) * 100,
                       });
                       try {
-                        const json = await checkBatchViaServer(chunk);
+                        const json = await checkBatchViaServer(chunk, rbs.overrides);
                         const parsed = JSON.parse(json) as {
                           files: unknown[];
                           summary: {
@@ -223,7 +308,7 @@ export function activate(context: vscode.ExtensionContext) {
                         totalError += parsed.summary.error_count || 0;
                       } catch {
                         // Batch chunk failed — fallback to CLI for whole workspace
-                        return runDocscribe({ strategy: 'check', workspace: true });
+                        return runDocscribe({ strategy: 'check', workspace: true, signal });
                       }
                     }
                     const aggregated = {
@@ -237,12 +322,14 @@ export function activate(context: vscode.ExtensionContext) {
                       },
                     };
                     const stdout = JSON.stringify(aggregated);
+                    const wasCancelled = token.isCancellationRequested;
                     return {
-                      success: true,
-                      hasIssues: totalOffense > 0,
-                      exitCode: totalOffense > 0 || totalError > 0 ? 1 : 0,
+                      success: !wasCancelled,
+                      hasIssues: totalOffense > 0 && !wasCancelled,
+                      cancelled: wasCancelled,
+                      exitCode: wasCancelled ? 2 : totalOffense > 0 || totalError > 0 ? 1 : 0,
                       stdout,
-                      stderr: '',
+                      stderr: wasCancelled ? 'Cancelled' : '',
                       output: stdout,
                     } as RunResult;
                   }
@@ -252,7 +339,7 @@ export function activate(context: vscode.ExtensionContext) {
           } catch {
             // Fall through to CLI on any batch error
           }
-          return runDocscribe({ strategy: 'check', workspace: true });
+          return runDocscribe({ strategy: 'check', workspace: true, signal });
         },
       );
       showResult(result);
@@ -261,16 +348,16 @@ export function activate(context: vscode.ExtensionContext) {
 
   const safeFixCmd = vscode.commands.registerCommand('docscribe.safeFix', async () => {
     if (!requireRubyFile() || !ensureGemInstalled()) return;
-    const result = await withProgress('DocScribe: applying safe fixes...', () =>
-      runDocscribe({ strategy: 'safe' }),
+    const result = await withProgress('DocScribe: applying safe fixes...', (signal) =>
+      runDocscribe({ strategy: 'safe', signal }),
     );
     showResult(result);
   });
 
   const aggressiveFixCmd = vscode.commands.registerCommand('docscribe.aggressiveFix', async () => {
     if (!requireRubyFile() || !ensureGemInstalled()) return;
-    const result = await withProgress('DocScribe: applying aggressive fixes...', () =>
-      runDocscribe({ strategy: 'aggressive' }),
+    const result = await withProgress('DocScribe: applying aggressive fixes...', (signal) =>
+      runDocscribe({ strategy: 'aggressive', signal }),
     );
     showResult(result);
   });
@@ -346,104 +433,41 @@ export function activate(context: vscode.ExtensionContext) {
 
   const updateTypesCmd = vscode.commands.registerCommand('docscribe.updateTypes', async () => {
     if (!ensureGemInstalled()) return;
-    const result = await withProgress('DocScribe: updating types from RBS...', () =>
-      runDocscribe({ strategy: 'updateTypes' }),
+    const result = await withProgress('DocScribe: updating types from RBS...', (signal) =>
+      runDocscribe({ strategy: 'updateTypes', signal }),
     );
     showResult(result);
+    await refreshOpenRubyDocuments();
   });
+
+  // Internal command for the RBS QuickFix (lightbulb only, no palette entry):
+  // update types for a single file, then refresh its diagnostics.
+  const updateTypesForFileCmd = vscode.commands.registerCommand(
+    'docscribe.updateTypesForFile',
+    async (uri: vscode.Uri) => {
+      if (!ensureGemInstalled() || !uri) return;
+      const result = await withProgress('DocScribe: updating types from RBS...', (signal) =>
+        runDocscribe({ file: uri.fsPath, strategy: 'updateTypes', signal }),
+      );
+      showResult(result);
+      await refreshOpenRubyDocuments();
+    },
+  );
+
+  // update_types writes files on disk (daemon and CLI alike) — re-check
+  // open Ruby documents so diagnostics reflect the new contents.
+  async function refreshOpenRubyDocuments(): Promise<void> {
+    for (const doc of vscode.workspace.textDocuments) {
+      if (['ruby', 'rake'].includes(doc.languageId)) {
+        await checkDocument(doc);
+      }
+    }
+  }
 
   const doctorCmd = vscode.commands.registerCommand('docscribe.doctor', async () => {
     const channel = vscode.window.createOutputChannel('DocScribe Doctor');
     channel.clear();
-    channel.appendLine('=== DocScribe Doctor ===');
-    channel.appendLine('');
-
-    try {
-      const rubyResult = await new Promise<string>((resolve) => {
-        execFile('ruby', ['--version'], (err: Error | null, stdout: string) => {
-          resolve(err ? 'Not found' : stdout.trim());
-        });
-      });
-      channel.appendLine(`Ruby: ${rubyResult}`);
-    } catch {
-      channel.appendLine('Ruby: Not found');
-    }
-
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (workspaceFolders) {
-      const rootPath = workspaceFolders[0].uri.fsPath;
-      const projectRoot = findProjectRoot(rootPath);
-      channel.appendLine(`Project root: ${projectRoot || 'Not found (no Gemfile)'}`);
-
-      if (projectRoot) {
-        const caps = getCachedCapabilities() || (await detectCapabilities(projectRoot));
-        if (caps) {
-          channel.appendLine(`DocScribe version: ${caps.version}`);
-          channel.appendLine(
-            `  Server mode: ${caps.hasServerMode ? 'Available' : 'Not available (requires >=1.5.1)'}`,
-          );
-          channel.appendLine(
-            `  Batch mode (check_batch): ${caps.hasBatchMode ? 'Available' : 'Not available (requires >=1.5.2)'}`,
-          );
-          channel.appendLine(
-            `  RBS collection: ${caps.hasRbsCollection ? 'Available' : 'Not available'}`,
-          );
-          channel.appendLine(
-            `  Exit code semantics: ${caps.hasExitCodeSemantics ? 'Available' : 'Not available'}`,
-          );
-          const useServer = vscode.workspace
-            .getConfiguration('docscribe')
-            .get<boolean>('useServer', true);
-          const backend = useServer && caps.hasServerMode ? 'server' : 'CLI';
-          const reason = !caps.hasServerMode
-            ? ' (fallback — gem <1.5.1)'
-            : !useServer
-              ? ' (disabled in settings)'
-              : '';
-          channel.appendLine(`  Backend: ${backend}${reason}`);
-          // Server socket / PID / locale diagnostics (feat/doctor-server-details)
-          const sock = getSocketPath();
-          if (sock) {
-            const exists = fs.existsSync(sock);
-            channel.appendLine(`  Socket: ${sock} (exists: ${exists ? 'yes' : 'no'})`);
-            const pid = readPid(sock);
-            if (pid !== null) {
-              const alive = isProcessAlive(pid);
-              channel.appendLine(`  Daemon PID: ${pid} (alive: ${alive ? 'yes' : 'no'})`);
-            } else {
-              channel.appendLine('  Daemon PID: not found (.pid missing)');
-            }
-          } else {
-            channel.appendLine('  Socket: not determined (daemon not started yet)');
-            channel.appendLine('  Daemon PID: unknown');
-          }
-          const lang = process.env.LANG || '(unset)';
-          const lcAll = process.env.LC_ALL || '(unset)';
-          const localeNote =
-            !process.env.LANG || !process.env.LANG.trim() ? ' → plugin will use en_US.UTF-8' : '';
-          channel.appendLine(`  Locale: LANG=${lang} LC_ALL=${lcAll}${localeNote}`);
-        } else {
-          channel.appendLine('DocScribe version: Not detected');
-          channel.appendLine('');
-          channel.appendLine('Troubleshooting:');
-          channel.appendLine('  1. Ensure docscribe gem is installed: gem list docscribe');
-          channel.appendLine('  2. Add to Gemfile: gem "docscribe"');
-          channel.appendLine('  3. Run: bundle install');
-        }
-      }
-    }
-
-    const config = vscode.workspace.getConfiguration('docscribe');
-    channel.appendLine('');
-    channel.appendLine('Settings:');
-    channel.appendLine(`  runOnSave: ${config.get('runOnSave')}`);
-    channel.appendLine(`  useBundleExec: ${config.get('useBundleExec')}`);
-    channel.appendLine(`  useRbs: ${config.get('useRbs')}`);
-    channel.appendLine(`  commandPath: ${config.get('commandPath')}`);
-    channel.appendLine(`  ignorePatterns: ${JSON.stringify(config.get('ignorePatterns'))}`);
-    channel.appendLine(`  foldComments: ${config.get('foldComments')}`);
-    channel.appendLine(`  omitBoilerplate: ${config.get('omitBoilerplate')}`);
-
+    channel.appendLine(await buildDoctorReport());
     channel.show();
   });
 
@@ -459,10 +483,17 @@ export function activate(context: vscode.ExtensionContext) {
     editorListener,
     toggleFoldCmd,
     updateTypesCmd,
+    updateTypesForFileCmd,
     doctorCmd,
+    folderWatcher,
   );
+
+  // Language-model tools for AI agents (card 469).
+  registerLmTools(context);
 }
 
-export function deactivate(): void {
-  stopServer();
+export function deactivate(): Promise<void> {
+  // Returned so VS Code waits for the shutdown RPC (card 522);
+  // stopServer itself bounds the wait.
+  return stopServer();
 }

@@ -6,11 +6,20 @@ import * as sinon from 'sinon';
 import {
   findProjectRoot,
   execCommand,
+  checkGemInstalled,
   parseCapabilities,
   clearCachedCapabilitiesForTesting,
   clearServerModeWarningForTesting,
   collectWorkspaceFiles,
   chunkArray,
+  normalizeFilePattern,
+  matchFilePattern,
+  processFileByFilter,
+  parseFilterFilesSection,
+  loadFileFilterPatterns,
+  loadGitignorePatterns,
+  ensureRbsGemLine,
+  getCommandArgs,
 } from '../../docscribeRunner';
 
 const fixturesDir = path.resolve(__dirname, '..', '..', '..', 'src', 'test', 'suite', 'fixtures');
@@ -57,6 +66,12 @@ suite('docscribeRunner', () => {
     test('stops at filesystem root', () => {
       const result = findProjectRoot('/');
       assert.strictEqual(result, null);
+    });
+
+    test('returns null for a deleted file instead of throwing (card 519)', () => {
+      const ghost = path.join(tmpDir, 'gone.rb');
+      assert.strictEqual(fs.existsSync(ghost), false);
+      assert.strictEqual(findProjectRoot(ghost), null);
     });
 
     test('detects Gemfile in the fixtures directory', () => {
@@ -128,6 +143,75 @@ suite('docscribeRunner', () => {
       assert.strictEqual(result.stderr, 'stderr');
       assert.strictEqual(result.output, 'stdout\nstderr');
     });
+
+    test('marks result cancelled when signal aborts (card 497)', async () => {
+      const controller = new AbortController();
+      const mockExec = sinon
+        .stub()
+        .callsFake(
+          (
+            _cmd: string,
+            _args: string[],
+            options: { signal?: AbortSignal },
+            callback: (err: Error | null, stdout: string, stderr: string) => void,
+          ) => {
+            if (options.signal?.aborted) {
+              callback(Object.assign(new Error('aborted'), { code: 'ABORT_ERR' }), '', '');
+            } else {
+              callback(null, 'output text', '');
+            }
+          },
+        );
+      controller.abort();
+      const result = await execCommand('bundle', ['exec', 'docscribe', 'a.rb'], '/tmp', mockExec, {
+        signal: controller.signal,
+      });
+      assert.strictEqual(result.cancelled, true);
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(result.hasIssues, false);
+    });
+
+    test('passes signal through to exec options', async () => {
+      const controller = new AbortController();
+      const mockExec = sinon.stub().yields(null, 'output text', '');
+      await execCommand('bundle', ['exec', 'docscribe', 'a.rb'], '/tmp', mockExec, {
+        signal: controller.signal,
+      });
+      const execOptions = mockExec.firstCall.args[2] as { signal?: AbortSignal };
+      assert.strictEqual(execOptions.signal, controller.signal);
+    });
+
+    test('cancelled defaults to false without signal', async () => {
+      const mockExec = sinon.stub().yields(null, 'output text', '');
+      const result = await execCommand('bundle', ['exec', 'docscribe', 'a.rb'], '/tmp', mockExec);
+      assert.strictEqual(result.cancelled, false);
+    });
+  });
+
+  suite('checkGemInstalled', () => {
+    test('returns true on exit 0 with version on stdout', async () => {
+      const mockExec = sinon.stub().yields(null, '1.6.2\n', '');
+      assert.strictEqual(await checkGemInstalled('/tmp', mockExec), true);
+    });
+
+    test('returns false on exit 1 (card 495: missing gem, bundler "not currently included")', async () => {
+      const err = Object.assign(new Error('missing gem'), { code: 1 });
+      const mockExec = sinon
+        .stub()
+        .yields(err, '', "Could not find gem 'docscribe' (not currently included)");
+      assert.strictEqual(await checkGemInstalled('/tmp', mockExec), false);
+    });
+
+    test('returns false on exit 0 without version on stdout', async () => {
+      const mockExec = sinon.stub().yields(null, '', '');
+      assert.strictEqual(await checkGemInstalled('/tmp', mockExec), false);
+    });
+
+    test('returns false on exec error (exit code 2+)', async () => {
+      const err = Object.assign(new Error('fail'), { code: 2 });
+      const mockExec = sinon.stub().yields(err, '', 'bundler: command not found: bundle');
+      assert.strictEqual(await checkGemInstalled('/tmp', mockExec), false);
+    });
   });
 
   suite('parseCapabilities', () => {
@@ -177,11 +261,23 @@ suite('docscribeRunner', () => {
       assert.strictEqual(caps.hasBatchMode, true);
     });
 
-    test('parses 1.6.1 — server and batch', () => {
+    test('parses 1.6.1 — server and batch, no 1.6.2 features', () => {
       const caps = parseCapabilities('1.6.1');
       if (!caps) throw new Error('expected caps');
       assert.strictEqual(caps.hasServerMode, true);
       assert.strictEqual(caps.hasBatchMode, true);
+      assert.strictEqual(caps.hasValidateTypes, false);
+      assert.strictEqual(caps.hasUpdateTypesRpc, false);
+    });
+
+    test('parses 1.6.2 — validate-types and update_types RPC', () => {
+      const caps = parseCapabilities('1.6.2');
+      if (!caps) throw new Error('expected caps');
+      assert.strictEqual(caps.version, '1.6.2');
+      assert.strictEqual(caps.hasServerMode, true);
+      assert.strictEqual(caps.hasBatchMode, true);
+      assert.strictEqual(caps.hasValidateTypes, true);
+      assert.strictEqual(caps.hasUpdateTypesRpc, true);
     });
 
     test('parses 2.0.0 — server and batch', () => {
@@ -243,6 +339,170 @@ suite('docscribeRunner', () => {
         fs.rmSync(root, { recursive: true, force: true });
       }
     });
+
+    test('applies yml exclude and include', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-collect-'));
+      try {
+        fs.mkdirSync(path.join(root, 'lib'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'spec'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'lib', 'a.rb'), '');
+        fs.writeFileSync(path.join(root, 'spec', 'a_spec.rb'), '');
+        fs.writeFileSync(
+          path.join(root, 'docscribe.yml'),
+          'filter:\n  files:\n    exclude:\n      - spec/\n    include:\n      - lib/\n',
+        );
+        const files = collectWorkspaceFiles(root);
+        assert.ok(files.includes(path.join(root, 'lib', 'a.rb')));
+        assert.ok(!files.includes(path.join(root, 'spec', 'a_spec.rb')));
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('respects root gitignore with negation', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-collect-'));
+      try {
+        fs.mkdirSync(path.join(root, 'gen'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'gen', 'a.rb'), '');
+        fs.writeFileSync(path.join(root, 'gen', 'keep.rb'), '');
+        fs.writeFileSync(path.join(root, 'top.rb'), '');
+        fs.writeFileSync(path.join(root, '.gitignore'), 'gen/\n!gen/keep.rb\n');
+        const files = collectWorkspaceFiles(root);
+        assert.ok(!files.includes(path.join(root, 'gen', 'a.rb')));
+        assert.ok(files.includes(path.join(root, 'gen', 'keep.rb')));
+        assert.ok(files.includes(path.join(root, 'top.rb')));
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  suite('fileFilterPatterns', () => {
+    test('normalizeFilePattern expands dir shorthand', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-filter-'));
+      try {
+        fs.mkdirSync(path.join(root, 'spec'), { recursive: true });
+        assert.deepStrictEqual(normalizeFilePattern('spec/', root), ['spec/**/*']);
+        assert.deepStrictEqual(normalizeFilePattern('spec', root), ['spec/**/*']);
+        assert.deepStrictEqual(normalizeFilePattern('lib/*.rb', root), ['lib/*.rb']);
+        assert.deepStrictEqual(normalizeFilePattern('  ', root), []);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('matchFilePattern handles globs, collapsed segments and regex', () => {
+      assert.strictEqual(matchFilePattern('spec/**/*', 'spec/a/b_spec.rb'), true);
+      assert.strictEqual(matchFilePattern('spec/**/*', 'lib/a.rb'), false);
+      assert.strictEqual(matchFilePattern('lib/**/*.rb', 'lib/a.rb'), true);
+      assert.strictEqual(matchFilePattern('/_spec\\.rb$/', 'spec/a_spec.rb'), true);
+      assert.strictEqual(matchFilePattern('/_spec\\.rb$/', 'lib/a.rb'), false);
+      assert.strictEqual(matchFilePattern('**/.hidden.rb', '.hidden.rb'), true);
+      // Card 555: trailing /**/* also matches the dir itself, so file
+      // negations (gen/keep.rb vs ignore gen/**/*) can un-ignore it.
+      assert.strictEqual(matchFilePattern('gen/**/*', 'gen/keep.rb'), true);
+      assert.strictEqual(matchFilePattern('gen/**/*', 'gen/c.rb'), true);
+      assert.strictEqual(matchFilePattern('gen/**/*', 'lib/a.rb'), false);
+    });
+
+    test('processFileByFilter: exclude wins, empty include means all', () => {
+      assert.strictEqual(processFileByFilter('lib/a.rb', [], []), true);
+      assert.strictEqual(processFileByFilter('spec/a.rb', [], ['spec']), true);
+      assert.strictEqual(processFileByFilter('spec/a.rb', [], ['spec/**/*']), false);
+      assert.strictEqual(processFileByFilter('lib/a.rb', ['lib/**/*'], ['lib/a.rb']), false);
+      assert.strictEqual(processFileByFilter('lib/a.rb', ['app/**/*'], []), false);
+      assert.strictEqual(processFileByFilter('lib/a.rb', ['lib/**/*'], []), true);
+    });
+
+    test('parseFilterFilesSection reads inline and dash forms', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-filter-'));
+      try {
+        const inline = parseFilterFilesSection(
+          'filter:\n  files:\n    include: [lib, app]\n    exclude: [spec]\n',
+          root,
+        );
+        assert.deepStrictEqual(inline.include, ['lib', 'app']);
+        assert.deepStrictEqual(inline.exclude, ['spec']);
+        const dash = parseFilterFilesSection(
+          'filter:\n  files:\n    exclude:\n      - spec/\n      - "tmp/x"\n',
+          root,
+        );
+        assert.deepStrictEqual(dash.include, []);
+        assert.deepStrictEqual(dash.exclude, ['spec/**/*', 'tmp/x']);
+        const missing = parseFilterFilesSection('other:\n  x: 1\n', root);
+        assert.deepStrictEqual(missing, { include: [], exclude: [] });
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('loadFileFilterPatterns falls back to spec exclude', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-filter-'));
+      try {
+        assert.deepStrictEqual(loadFileFilterPatterns(root), { include: [], exclude: ['spec'] });
+        fs.writeFileSync(
+          path.join(root, 'docscribe.yml'),
+          'filter:\n  files:\n    include: [lib]\n',
+        );
+        assert.deepStrictEqual(loadFileFilterPatterns(root), {
+          include: ['lib'],
+          exclude: ['spec'],
+        });
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('fallback exclude actually filters an existing spec dir', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-filter-'));
+      try {
+        fs.mkdirSync(path.join(root, 'spec'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'spec', 'a_spec.rb'), '');
+        fs.writeFileSync(path.join(root, 'top.rb'), '');
+        // no yml: fallback must expand to spec/**/* since the dir exists
+        assert.deepStrictEqual(loadFileFilterPatterns(root), {
+          include: [],
+          exclude: ['spec/**/*'],
+        });
+        const files = collectWorkspaceFiles(root);
+        assert.ok(files.includes(path.join(root, 'top.rb')));
+        assert.ok(!files.includes(path.join(root, 'spec', 'a_spec.rb')));
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('loadGitignorePatterns skips comments and splits negations', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-filter-'));
+      try {
+        fs.writeFileSync(path.join(root, '.gitignore'), '# comment\n\ngen/\n!gen/keep.rb\n');
+        assert.deepStrictEqual(loadGitignorePatterns(root), {
+          ignore: ['gen/**/*'],
+          negate: ['gen/keep.rb', 'gen/keep.rb/**/*'],
+        });
+        fs.rmSync(path.join(root, '.gitignore'));
+        assert.deepStrictEqual(loadGitignorePatterns(root), { ignore: [], negate: [] });
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  suite('ensureRbsGemLine', () => {
+    test('appends gem line when missing', () => {
+      const out = ensureRbsGemLine('source "https://rubygems.org"\ngem "rails"\n');
+      assert.ok(out?.endsWith('gem "rbs"\n'));
+      assert.ok(out?.includes('gem "rails"'));
+    });
+
+    test('adds trailing newline when missing', () => {
+      assert.strictEqual(ensureRbsGemLine('gem "rails"'), 'gem "rails"\ngem "rbs"\n');
+    });
+
+    test('returns null when already present', () => {
+      assert.strictEqual(ensureRbsGemLine('gem "rbs"\n'), null);
+      assert.strictEqual(ensureRbsGemLine("gem 'rbs'\n"), null);
+    });
   });
 
   suite('chunkArray', () => {
@@ -256,6 +516,52 @@ suite('docscribeRunner', () => {
 
     test('handles empty array', () => {
       assert.deepStrictEqual(chunkArray([], 32), []);
+    });
+  });
+
+  suite('getCommandArgs updateTypes (card 552)', () => {
+    test('updateTypes has no --format flag (gem rejects it)', () => {
+      const args = getCommandArgs('updateTypes', true, true, false, 'widget.rb', true, true);
+      assert.ok(args.includes('update_types'));
+      assert.ok(!args.includes('--format'));
+      assert.ok(!args.includes('json'));
+    });
+
+    test('updateTypes carries no mode flags (gem rejects -A/-k/-B)', () => {
+      const args = getCommandArgs('updateTypes', true, true, true, 'widget.rb', true, true);
+      assert.ok(!args.includes('-A'));
+      assert.ok(!args.includes('-k'));
+      assert.ok(!args.includes('-B'));
+    });
+
+    test('updateTypes target with rbs, collection and validate flags', () => {
+      const args = getCommandArgs('updateTypes', true, true, false, 'widget.rb', true, true);
+      assert.deepStrictEqual(args, [
+        'update_types',
+        '--rbs',
+        '--rbs-collection',
+        '--validate-types',
+        'widget.rb',
+      ]);
+    });
+
+    test('updateTypes --no-validate-types when disabled', () => {
+      const args = getCommandArgs('updateTypes', true, false, false, 'f.rb', false, false);
+      assert.ok(args.includes('--no-validate-types'));
+      assert.ok(!args.includes('--format'));
+    });
+
+    test('check keeps --format json', () => {
+      const args = getCommandArgs('check', true, false, false, 'f.rb', undefined, false);
+      assert.ok(args.includes('--format'));
+      assert.ok(args.includes('json'));
+    });
+
+    test('updateTypes workspace call carries no file arg (always CLI)', () => {
+      const args = getCommandArgs('updateTypes', true, true, false, undefined, true, true);
+      assert.ok(!args.includes('--format'));
+      assert.ok(args.includes('update_types'));
+      assert.ok(args.includes('--rbs'));
     });
   });
 });
